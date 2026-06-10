@@ -1,0 +1,11 @@
+[general]
+name=WudaAccessibilityAnalyzer
+qgisMinimumVersion=3.28
+description=武汉大学校园可达性与设施适宜性分析插件。
+version=0.1.0
+author=Codex
+email=
+about=基于标准化数据、QGIS Processing 和共享 core 的薄插件壳，提供可达性与设施适宜性分析入口。
+category=Analysis
+experimental=False
+deprecated=False

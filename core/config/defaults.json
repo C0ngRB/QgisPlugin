@@ -1,0 +1,52 @@
+{
+  "service_thresholds": {
+    "canteen": {
+      "time_min": [5, 10, 15],
+      "decay_weight": [1.0, 0.6, 0.3],
+      "default_capacity": 300
+    },
+    "express": {
+      "time_min": [5, 10],
+      "decay_weight": [1.0, 0.5],
+      "default_capacity": 120
+    },
+    "toilet": {
+      "time_min": [3, 6, 10],
+      "decay_weight": [1.0, 0.7, 0.4],
+      "default_capacity": 80
+    },
+    "teaching_service": {
+      "time_min": [5, 10, 15],
+      "decay_weight": [1.0, 0.65, 0.35],
+      "default_capacity": 200
+    },
+    "study_space": {
+      "time_min": [5, 10, 15],
+      "decay_weight": [1.0, 0.7, 0.4],
+      "default_capacity": 150
+    },
+    "medical": {
+      "time_min": [8, 15, 20],
+      "decay_weight": [1.0, 0.6, 0.25],
+      "default_capacity": 60
+    },
+    "sports": {
+      "time_min": [8, 15, 20],
+      "decay_weight": [1.0, 0.6, 0.3],
+      "default_capacity": 180
+    },
+    "scenic": {
+      "time_min": [8, 15, 25],
+      "decay_weight": [1.0, 0.55, 0.25],
+      "default_capacity": 100
+    },
+    "other": {
+      "time_min": [5, 10, 15],
+      "decay_weight": [1.0, 0.5, 0.2],
+      "default_capacity": 50
+    }
+  },
+  "default_population_weight": 1.0,
+  "result_suffix_width": 3,
+  "suitability_class_count": 5
+}

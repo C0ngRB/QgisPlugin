@@ -1,0 +1,5 @@
+WUDA QGIS plugins build report
+
+- wuda_accessibility_analyzer: wuda_accessibility_analyzer.zip
+- wuda_terrain_hydro_analyzer: wuda_terrain_hydro_analyzer.zip
+- manifest: release_manifest.json

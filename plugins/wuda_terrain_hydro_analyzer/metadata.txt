@@ -1,0 +1,11 @@
+[general]
+name=WudaTerrainHydroAnalyzer
+qgisMinimumVersion=3.28
+description=武汉大学校园地形与水文分析插件。
+version=0.1.0
+author=Codex
+email=
+about=基于标准化 DEM、QGIS Processing、SAGA 检测和共享 core 的薄插件壳。
+category=Analysis
+experimental=False
+deprecated=False
