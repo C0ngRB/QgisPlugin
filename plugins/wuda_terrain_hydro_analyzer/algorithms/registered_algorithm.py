@@ -14,6 +14,7 @@ from ..support.core_path import ensure_core_import_path
 ensure_core_import_path(__file__)
 
 from core.hydrology.saga import saga_provider_available
+from core.io.qgis_output import unique_qgis_output_path
 from core.registry.algorithms import TERRAIN_HYDRO_PROVIDER_ID, algorithm_display_name
 from core.reporting.summary import write_run_summary
 from core.terrain.basic_terrain import extract_aspect, extract_contours, extract_hillshade, extract_slope
@@ -122,7 +123,7 @@ class RegisteredTerrainHydroAlgorithm(QgsProcessingAlgorithm):
             raise QgsProcessingException(f"{self.displayName()} 尚未在当前阶段实现真实空间分析。")
 
         if self.algorithm_name in self.TERRAIN_ALGORITHMS:
-            output = self.parameterAsOutputLayer(parameters, self.OUTPUT, context)
+            output = unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context))
             dem_layer = parameters[self.DEM]
             if self.algorithm_name == "extract_slope":
                 result = extract_slope(dem_layer, self.parameterAsDouble(parameters, self.Z_FACTOR, context), output, context, feedback)

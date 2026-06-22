@@ -9,6 +9,7 @@ sys.path.insert(0, str(ROOT))
 
 from core.config.defaults import load_defaults
 from core.io.output_naming import unique_output_path
+from core.io.qgis_output import unique_qgis_output_path
 from core.registry.algorithms import ACCESSIBILITY_PROVIDER_ID, TERRAIN_HYDRO_PROVIDER_ID, provider_algorithms
 from core.reporting.summary import write_run_summary
 
@@ -35,6 +36,18 @@ class CoreContractTests(unittest.TestCase):
             target.write_text("{}", encoding="utf-8")
             self.assertEqual(unique_output_path(target).name, "result_001.json")
 
+    def test_unique_qgis_output_path_keeps_transient_outputs(self):
+        """函数含义：校验 QGIS 临时输出不被改名；上游由测试执行器调用；下游保护 Processing 临时图层契约；风险点是不覆盖所有 provider URI。"""
+        self.assertEqual(unique_qgis_output_path("TEMPORARY_OUTPUT"), "TEMPORARY_OUTPUT")
+        self.assertEqual(unique_qgis_output_path("memory:"), "memory:")
+
+    def test_unique_qgis_output_path_preserves_provider_suffix(self):
+        """函数含义：校验带 provider 参数的 QGIS 输出路径只改文件名；上游由测试执行器调用；下游避免覆盖 GeoPackage 文件并保留 layername；风险点是不模拟 QGIS 写入。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "result.gpkg"
+            target.write_text("", encoding="utf-8")
+            output = unique_qgis_output_path(f"{target}|layername=test")
+            self.assertTrue(output.endswith("result_001.gpkg|layername=test"))
     def test_write_run_summary_records_real_output_names(self):
         """函数含义：校验运行摘要记录输出和模式；上游由测试执行器调用；下游保证课程验收可追踪；风险点是不验证 QGIS 图层加载。"""
         with tempfile.TemporaryDirectory() as temp_dir:
