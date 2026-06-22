@@ -1,3 +1,4 @@
+import processing
 from qgis.PyQt.QtWidgets import QCheckBox, QDialog, QLabel, QPushButton, QVBoxLayout
 
 from ..support.core_path import ensure_core_import_path
@@ -41,5 +42,6 @@ class WudaAccessibilityPanel(QDialog):
             self.layout.addWidget(button)
 
     def open_processing_dialog(self, algorithm_name):
-        """函数含义：打开 QGIS Processing 原生算法窗口；上游由算法按钮触发；下游交给 QGIS 参数面板执行；风险点是 iface 方法依赖 QGIS 版本。"""
-        self.iface.openProcessingDialog(f"{ACCESSIBILITY_PROVIDER_ID}:{algorithm_name}")
+        """函数含义：打开 QGIS Processing 原生算法窗口；上游由算法按钮触发；下游交给 Processing 参数面板执行；风险点是算法 ID 不存在时会由 QGIS 报错。"""
+        processing.execAlgorithmDialog(f"{ACCESSIBILITY_PROVIDER_ID}:{algorithm_name}")
+
