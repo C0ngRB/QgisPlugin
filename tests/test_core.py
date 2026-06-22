@@ -35,7 +35,11 @@ class CoreContractTests(unittest.TestCase):
             algorithms = provider_algorithms(provider_id)
             self.assertIn("validate_input_layers", algorithms)
             self.assertIn("reproject_to_analysis_crs", algorithms)
+            self.assertIn("standardize_buildings", algorithms)
             self.assertIn("standardize_roads", algorithms)
+            self.assertIn("standardize_pois", algorithms)
+            self.assertIn("standardize_elevation_points", algorithms)
+            self.assertIn("standardize_tracks", algorithms)
     def test_registry_includes_facility_suitability(self):
         """函数含义：校验设施适宜性算法已进入注册表；上游由测试执行器调用；下游保护可达性插件能发现 ADR 核心评价算法；风险点是不验证 QGIS 空间计算。"""
         algorithms = provider_algorithms(ACCESSIBILITY_PROVIDER_ID)
