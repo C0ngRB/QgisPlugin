@@ -29,6 +29,13 @@ class CoreContractTests(unittest.TestCase):
         self.assertIn("calculate_service_area", algorithms)
         self.assertIn("calculate_shortest_path", algorithms)
 
+    def test_registry_includes_standardization_basics(self):
+        """函数含义：校验两个插件都暴露标准化基础算法；上游由测试执行器调用；下游保护 Provider 工具箱与 ADR 标准化入口一致；风险点是不验证 QGIS 运行时参数。"""
+        for provider_id in (ACCESSIBILITY_PROVIDER_ID, TERRAIN_HYDRO_PROVIDER_ID):
+            algorithms = provider_algorithms(provider_id)
+            self.assertIn("validate_input_layers", algorithms)
+            self.assertIn("reproject_to_analysis_crs", algorithms)
+            self.assertIn("standardize_roads", algorithms)
     def test_registry_includes_facility_suitability(self):
         """函数含义：校验设施适宜性算法已进入注册表；上游由测试执行器调用；下游保护可达性插件能发现 ADR 核心评价算法；风险点是不验证 QGIS 空间计算。"""
         algorithms = provider_algorithms(ACCESSIBILITY_PROVIDER_ID)

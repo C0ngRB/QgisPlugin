@@ -2,6 +2,7 @@ from qgis.core import (
     QgsProcessing,
     QgsProcessingAlgorithm,
     QgsProcessingException,
+    QgsProcessingParameterCrs,
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterField,
     QgsProcessingParameterFolderDestination,
@@ -19,6 +20,8 @@ from core.hydrology.saga import saga_provider_available
 from core.io.qgis_output import unique_qgis_output_path
 from core.registry.algorithms import TERRAIN_HYDRO_PROVIDER_ID, algorithm_display_name
 from core.reporting.summary import write_run_summary
+from core.standardization.validation import validate_input_layer
+from core.standardization.vector import reproject_to_analysis_crs, standardize_roads
 from core.terrain.basic_terrain import extract_aspect, extract_contours, extract_hillshade, extract_slope
 from core.terrain.elevation_compare import compare_dem_with_elevation_points
 
@@ -27,16 +30,21 @@ class RegisteredTerrainHydroAlgorithm(QgsProcessingAlgorithm):
     """类含义：地形水文插件通用薄 Algorithm；上游由 Provider 按注册表创建；下游把执行契约交给 core；风险点是当前阶段未实现的算法必须显式失败。"""
 
     OUTPUT_FOLDER = "OUTPUT_FOLDER"
+    INPUT = "INPUT"
+    TARGET_CRS = "TARGET_CRS"
     DEM = "DEM"
     ELEVATION_POINTS = "ELEVATION_POINTS"
+    ROADS = "ROADS"
     MEASURED_FIELD = "MEASURED_FIELD"
+    DEFAULT_SPEED = "DEFAULT_SPEED"
     Z_FACTOR = "Z_FACTOR"
     AZIMUTH = "AZIMUTH"
     VERTICAL_ANGLE = "VERTICAL_ANGLE"
     INTERVAL = "INTERVAL"
     OUTPUT = "OUTPUT"
+    STANDARDIZATION_ALGORITHMS = {"validate_input_layers", "reproject_to_analysis_crs", "standardize_roads"}
     TERRAIN_ALGORITHMS = {"extract_slope", "extract_aspect", "extract_hillshade", "extract_contours"}
-    IMPLEMENTED_ALGORITHMS = TERRAIN_ALGORITHMS | {"compare_dem_with_elevation_points", "check_saga_provider", "run_terrain_workflow", "run_hydrology_workflow"}
+    IMPLEMENTED_ALGORITHMS = STANDARDIZATION_ALGORITHMS | TERRAIN_ALGORITHMS | {"compare_dem_with_elevation_points", "check_saga_provider", "run_terrain_workflow", "run_hydrology_workflow"}
 
     def __init__(self, algorithm_name):
         """函数含义：绑定单个注册算法名；上游由 Provider 遍历 core 注册表调用；下游让同一个薄类承载多个算法入口；风险点是 algorithm_name 必须来自注册表。"""
@@ -61,6 +69,12 @@ class RegisteredTerrainHydroAlgorithm(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         """函数含义：返回算法帮助文本；上游由 QGIS 参数面板展示；下游说明当前算法能力边界；风险点是不能承诺尚未实现的真实空间计算。"""
+        if self.algorithm_name == "validate_input_layers":
+            return "输入矢量图层，写出 validation_report.json，记录 CRS、字段和要素数。"
+        if self.algorithm_name == "reproject_to_analysis_crs":
+            return "输入矢量图层和分析 CRS，输出转换后的矢量图层。"
+        if self.algorithm_name == "standardize_roads":
+            return "输入道路线图层，输出带 length_m、access_cost、walkable、geometry_status 字段的标准道路。"
         if self.algorithm_name in self.TERRAIN_ALGORITHMS:
             return "输入 DEM 栅格，输出真实地形分析图层；坡度、坡向和晕渲输出 GeoTIFF，等高线输出矢量线图层。"
         if self.algorithm_name == "compare_dem_with_elevation_points":
@@ -73,6 +87,20 @@ class RegisteredTerrainHydroAlgorithm(QgsProcessingAlgorithm):
 
     def initAlgorithm(self, config=None):
         """函数含义：声明当前算法参数；上游由 QGIS Processing 打开参数面板时调用；下游生成用户输入表单；风险点是未实现算法仍只暴露摘要输出目录。"""
+        if self.algorithm_name == "validate_input_layers":
+            self.addParameter(QgsProcessingParameterFeatureSource(self.INPUT, "输入矢量图层", [QgsProcessing.TypeVectorAnyGeometry]))
+            self.addParameter(QgsProcessingParameterFolderDestination(self.OUTPUT_FOLDER, "输出目录"))
+            return
+        if self.algorithm_name == "reproject_to_analysis_crs":
+            self.addParameter(QgsProcessingParameterFeatureSource(self.INPUT, "输入矢量图层", [QgsProcessing.TypeVectorAnyGeometry]))
+            self.addParameter(QgsProcessingParameterCrs(self.TARGET_CRS, "分析 CRS", defaultValue="EPSG:4526"))
+            self.addParameter(QgsProcessingParameterVectorDestination(self.OUTPUT, "转换后图层", QgsProcessing.TypeVectorAnyGeometry))
+            return
+        if self.algorithm_name == "standardize_roads":
+            self.addParameter(QgsProcessingParameterFeatureSource(self.ROADS, "道路线图层", [QgsProcessing.TypeVectorLine]))
+            self.addParameter(QgsProcessingParameterNumber(self.DEFAULT_SPEED, "默认步行速度（千米/时）", type=QgsProcessingParameterNumber.Double, defaultValue=5.0, minValue=0.1))
+            self.addParameter(QgsProcessingParameterVectorDestination(self.OUTPUT, "标准化道路", QgsProcessing.TypeVectorLine))
+            return
         if self.algorithm_name in self.TERRAIN_ALGORITHMS:
             self.addParameter(QgsProcessingParameterRasterLayer(self.DEM, "DEM 栅格"))
             if self.algorithm_name in {"extract_slope", "extract_aspect", "extract_hillshade"}:
@@ -86,21 +114,32 @@ class RegisteredTerrainHydroAlgorithm(QgsProcessingAlgorithm):
                 return
             self.addParameter(QgsProcessingParameterRasterDestination(self.OUTPUT, self.displayName()))
             return
-
         if self.algorithm_name == "compare_dem_with_elevation_points":
             self.addParameter(QgsProcessingParameterRasterLayer(self.DEM, "DEM 栅格"))
             self.addParameter(QgsProcessingParameterFeatureSource(self.ELEVATION_POINTS, "高程点图层", [QgsProcessing.TypeVectorPoint]))
             self.addParameter(QgsProcessingParameterField(self.MEASURED_FIELD, "实测高程字段", type=QgsProcessingParameterField.Numeric, parentLayerParameterName=self.ELEVATION_POINTS))
             self.addParameter(QgsProcessingParameterVectorDestination(self.OUTPUT, "DEM 与高程点对比", QgsProcessing.TypeVectorPoint))
             return
-
         self.addParameter(QgsProcessingParameterFolderDestination(self.OUTPUT_FOLDER, "输出目录"))
 
     def processAlgorithm(self, parameters, context, feedback):
         """函数含义：执行已实现的地形水文算法入口；上游由 QGIS Processing 运行器调用；下游生成真实图层、摘要或显式拒绝未实现算法；风险点是不得生成假空间分析结果。"""
         if self.algorithm_name not in self.IMPLEMENTED_ALGORITHMS:
             raise QgsProcessingException(f"{self.displayName()} 尚未在当前阶段实现真实空间分析。")
-
+        if self.algorithm_name == "validate_input_layers":
+            output_folder = self.parameterAsString(parameters, self.OUTPUT_FOLDER, context)
+            report_path = validate_input_layer(parameters[self.INPUT], output_folder)
+            feedback.pushInfo(f"已写入校验报告：{report_path}")
+            return {self.OUTPUT_FOLDER: output_folder}
+        if self.algorithm_name == "reproject_to_analysis_crs":
+            result = reproject_to_analysis_crs(parameters[self.INPUT], self.parameterAsCrs(parameters, self.TARGET_CRS, context), unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context)), context, feedback)
+            return {self.OUTPUT: result["OUTPUT"]}
+        if self.algorithm_name == "standardize_roads":
+            speed = self.parameterAsDouble(parameters, self.DEFAULT_SPEED, context)
+            if speed <= 0:
+                raise QgsProcessingException("默认步行速度必须大于 0。")
+            result = standardize_roads(parameters[self.ROADS], speed, unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context)), context, feedback)
+            return {self.OUTPUT: result["OUTPUT"]}
         if self.algorithm_name in self.TERRAIN_ALGORITHMS:
             output = unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context))
             dem_layer = parameters[self.DEM]
@@ -116,20 +155,17 @@ class RegisteredTerrainHydroAlgorithm(QgsProcessingAlgorithm):
                     raise QgsProcessingException("等高距必须大于 0。")
                 result = extract_contours(dem_layer, interval, output, context, feedback)
             return {self.OUTPUT: result["OUTPUT"]}
-
         if self.algorithm_name == "compare_dem_with_elevation_points":
             measured_field = self.parameterAsString(parameters, self.MEASURED_FIELD, context)
             if not measured_field:
                 raise QgsProcessingException("必须选择实测高程字段。")
             result = compare_dem_with_elevation_points(parameters[self.ELEVATION_POINTS], measured_field, parameters[self.DEM], unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context)), context, feedback)
             return {self.OUTPUT: result["OUTPUT"]}
-
         output_folder = self.parameterAsString(parameters, self.OUTPUT_FOLDER, context)
         warnings = ["当前阶段仅验证插件工作流入口和摘要契约，未生成空间分析结果。"]
         if self.algorithm_name == "check_saga_provider":
             is_available = saga_provider_available()
             warnings = [] if is_available else ["SAGA Provider 不可用，后续真实水文流程应进入 demo/sample 模式。"]
-
         summary_path = write_run_summary(output_folder, f"{TERRAIN_HYDRO_PROVIDER_ID}:{self.algorithm_name}", outputs=[], mode="real", warnings=warnings)
         feedback.pushInfo(f"已写入运行摘要：{summary_path}")
         return {self.OUTPUT_FOLDER: output_folder}

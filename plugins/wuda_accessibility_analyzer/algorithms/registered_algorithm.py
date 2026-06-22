@@ -2,6 +2,7 @@ from qgis.core import (
     QgsProcessing,
     QgsProcessingAlgorithm,
     QgsProcessingException,
+    QgsProcessingParameterCrs,
     QgsProcessingParameterDistance,
     QgsProcessingParameterFeatureSink,
     QgsProcessingParameterField,
@@ -23,12 +24,16 @@ from core.accessibility.suitability import calculate_facility_suitability
 from core.io.qgis_output import unique_qgis_output_path
 from core.registry.algorithms import ACCESSIBILITY_PROVIDER_ID, algorithm_display_name
 from core.reporting.summary import write_run_summary
+from core.standardization.validation import validate_input_layer
+from core.standardization.vector import reproject_to_analysis_crs, standardize_roads
 
 
 class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
     """类含义：可达性插件通用薄 Algorithm；上游由 Provider 按注册表创建；下游把执行契约交给 core；风险点是当前阶段未实现的算法必须显式失败。"""
 
     OUTPUT_FOLDER = "OUTPUT_FOLDER"
+    INPUT = "INPUT"
+    TARGET_CRS = "TARGET_CRS"
     BUILDINGS = "BUILDINGS"
     FACILITIES = "FACILITIES"
     ROADS = "ROADS"
@@ -41,6 +46,7 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
     NEIGHBORS = "NEIGHBORS"
     DEFAULT_SPEED = "DEFAULT_SPEED"
     OUTPUT = "OUTPUT"
+    STANDARDIZATION_ALGORITHMS = {"validate_input_layers", "reproject_to_analysis_crs", "standardize_roads"}
     VECTOR_OUTPUT_ALGORITHMS = {
         "calculate_road_length",
         "build_network_cost",
@@ -50,7 +56,7 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
         "calculate_shortest_path",
         "calculate_facility_suitability",
     }
-    IMPLEMENTED_ALGORITHMS = VECTOR_OUTPUT_ALGORITHMS | {
+    IMPLEMENTED_ALGORITHMS = STANDARDIZATION_ALGORITHMS | VECTOR_OUTPUT_ALGORITHMS | {
         "run_standardization_workflow",
         "run_accessibility_workflow",
     }
@@ -78,6 +84,12 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         """函数含义：返回算法帮助文本；上游由 QGIS 参数面板展示；下游说明当前算法能力边界；风险点是不能承诺尚未实现的真实空间计算。"""
+        if self.algorithm_name == "validate_input_layers":
+            return "输入矢量图层，写出 validation_report.json，记录 CRS、字段和要素数。"
+        if self.algorithm_name == "reproject_to_analysis_crs":
+            return "输入矢量图层和分析 CRS，输出转换后的矢量图层。"
+        if self.algorithm_name == "standardize_roads":
+            return "输入道路线图层，输出带 length_m、access_cost、walkable、geometry_status 字段的标准道路。"
         if self.algorithm_name == "generate_facility_buffers":
             return "输入设施图层和服务距离，输出真实缓冲区面图层；距离单位取决于输入图层 CRS。"
         if self.algorithm_name == "calculate_road_length":
@@ -100,13 +112,26 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
 
     def initAlgorithm(self, config=None):
         """函数含义：声明当前算法参数；上游由 QGIS Processing 打开参数面板时调用；下游生成用户输入表单；风险点是未实现算法仍只暴露摘要输出目录。"""
+        if self.algorithm_name == "validate_input_layers":
+            self.addParameter(QgsProcessingParameterFeatureSource(self.INPUT, "输入矢量图层", [QgsProcessing.TypeVectorAnyGeometry]))
+            self.addParameter(QgsProcessingParameterFolderDestination(self.OUTPUT_FOLDER, "输出目录"))
+            return
+        if self.algorithm_name == "reproject_to_analysis_crs":
+            self.addParameter(QgsProcessingParameterFeatureSource(self.INPUT, "输入矢量图层", [QgsProcessing.TypeVectorAnyGeometry]))
+            self.addParameter(QgsProcessingParameterCrs(self.TARGET_CRS, "分析 CRS", defaultValue="EPSG:4526"))
+            self.addParameter(QgsProcessingParameterFeatureSink(self.OUTPUT, "转换后图层", QgsProcessing.TypeVectorAnyGeometry))
+            return
+        if self.algorithm_name == "standardize_roads":
+            self._add_roads_parameter()
+            self._add_default_speed_parameter()
+            self.addParameter(QgsProcessingParameterFeatureSink(self.OUTPUT, "标准化道路", QgsProcessing.TypeVectorLine))
+            return
         if self.algorithm_name in {"calculate_road_length", "build_network_cost"}:
             self._add_roads_parameter()
             if self.algorithm_name == "build_network_cost":
                 self._add_default_speed_parameter()
             self.addParameter(QgsProcessingParameterFeatureSink(self.OUTPUT, self.displayName(), QgsProcessing.TypeVectorLine))
             return
-
         if self.algorithm_name == "calculate_nearest_facility":
             self.addParameter(QgsProcessingParameterFeatureSource(self.SOURCE, "源图层（建筑或需求点）", [QgsProcessing.TypeVectorAnyGeometry]))
             self.addParameter(QgsProcessingParameterFeatureSource(self.FACILITIES, "设施图层", [QgsProcessing.TypeVectorAnyGeometry]))
@@ -114,7 +139,6 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
             self.addParameter(QgsProcessingParameterDistance(self.DISTANCE, "最大搜索距离（0 表示不限制）", defaultValue=0.0, parentParameterName=self.SOURCE))
             self.addParameter(QgsProcessingParameterFeatureSink(self.OUTPUT, "最近设施校核连线", QgsProcessing.TypeVectorLine))
             return
-
         if self.algorithm_name == "calculate_service_area":
             self._add_roads_parameter()
             self.addParameter(QgsProcessingParameterFeatureSource(self.FACILITIES, "设施点图层", [QgsProcessing.TypeVectorPoint]))
@@ -123,7 +147,6 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
             self._add_tolerance_parameter()
             self.addParameter(QgsProcessingParameterFeatureSink(self.OUTPUT, "网络服务区线", QgsProcessing.TypeVectorLine))
             return
-
         if self.algorithm_name == "calculate_shortest_path":
             self._add_roads_parameter()
             self.addParameter(QgsProcessingParameterPoint(self.START_POINT, "起点"))
@@ -132,7 +155,6 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
             self._add_tolerance_parameter()
             self.addParameter(QgsProcessingParameterFeatureSink(self.OUTPUT, "最短路径线", QgsProcessing.TypeVectorLine))
             return
-
         if self.algorithm_name == "calculate_facility_suitability":
             self.addParameter(QgsProcessingParameterFeatureSource(self.BUILDINGS, "建筑图层", [QgsProcessing.TypeVectorAnyGeometry]))
             self.addParameter(QgsProcessingParameterFeatureSource(self.FACILITIES, "设施点图层", [QgsProcessing.TypeVectorPoint]))
@@ -144,25 +166,35 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
             self.addParameter(QgsProcessingParameterDistance(self.DISTANCE, "服务距离", defaultValue=300.0, parentParameterName=self.FACILITIES))
             self.addParameter(QgsProcessingParameterFeatureSink(self.OUTPUT, "设施服务缓冲区", QgsProcessing.TypeVectorPolygon))
             return
-
         self.addParameter(QgsProcessingParameterFolderDestination(self.OUTPUT_FOLDER, "输出目录"))
 
     def processAlgorithm(self, parameters, context, feedback):
         """函数含义：执行已实现的可达性算法入口；上游由 QGIS Processing 运行器调用；下游生成真实图层、摘要或显式拒绝未实现算法；风险点是不得生成假空间分析结果。"""
         if self.algorithm_name not in self.IMPLEMENTED_ALGORITHMS:
             raise QgsProcessingException(f"{self.displayName()} 尚未在当前阶段实现真实空间分析。")
-
+        if self.algorithm_name == "validate_input_layers":
+            output_folder = self.parameterAsString(parameters, self.OUTPUT_FOLDER, context)
+            report_path = validate_input_layer(parameters[self.INPUT], output_folder)
+            feedback.pushInfo(f"已写入校验报告：{report_path}")
+            return {self.OUTPUT_FOLDER: output_folder}
+        if self.algorithm_name == "reproject_to_analysis_crs":
+            result = reproject_to_analysis_crs(parameters[self.INPUT], self.parameterAsCrs(parameters, self.TARGET_CRS, context), unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context)), context, feedback)
+            return {self.OUTPUT: result["OUTPUT"]}
+        if self.algorithm_name == "standardize_roads":
+            speed = self.parameterAsDouble(parameters, self.DEFAULT_SPEED, context)
+            if speed <= 0:
+                raise QgsProcessingException("默认步行速度必须大于 0。")
+            result = standardize_roads(parameters[self.ROADS], speed, unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context)), context, feedback)
+            return {self.OUTPUT: result["OUTPUT"]}
         if self.algorithm_name == "calculate_road_length":
             result = calculate_road_length(parameters[self.ROADS], unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context)), context, feedback)
             return {self.OUTPUT: result["OUTPUT"]}
-
         if self.algorithm_name == "build_network_cost":
             speed = self.parameterAsDouble(parameters, self.DEFAULT_SPEED, context)
             if speed <= 0:
                 raise QgsProcessingException("默认步行速度必须大于 0。")
             result = build_network_cost(parameters[self.ROADS], speed, unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context)), context, feedback)
             return {self.OUTPUT: result["OUTPUT"]}
-
         if self.algorithm_name == "calculate_nearest_facility":
             neighbors = self.parameterAsInt(parameters, self.NEIGHBORS, context)
             max_distance = self.parameterAsDouble(parameters, self.DISTANCE, context)
@@ -170,7 +202,6 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
                 raise QgsProcessingException("最近设施数量必须至少为 1。")
             result = calculate_nearest_facility(parameters[self.SOURCE], parameters[self.FACILITIES], neighbors, max_distance, unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context)), context, feedback)
             return {self.OUTPUT: result["OUTPUT"]}
-
         if self.algorithm_name == "calculate_service_area":
             travel_cost = self.parameterAsDouble(parameters, self.TRAVEL_COST, context)
             speed = self.parameterAsDouble(parameters, self.DEFAULT_SPEED, context)
@@ -179,7 +210,6 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
                 raise QgsProcessingException("服务距离和默认速度必须大于 0，捕捉容差不能小于 0。")
             result = calculate_service_area(parameters[self.ROADS], parameters[self.FACILITIES], travel_cost, speed, tolerance, unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context)), context, feedback)
             return {self.OUTPUT: result["OUTPUT"]}
-
         if self.algorithm_name == "calculate_shortest_path":
             speed = self.parameterAsDouble(parameters, self.DEFAULT_SPEED, context)
             tolerance = self.parameterAsDouble(parameters, self.TOLERANCE, context)
@@ -187,7 +217,6 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
                 raise QgsProcessingException("默认速度必须大于 0，捕捉容差不能小于 0。")
             result = calculate_shortest_path(parameters[self.ROADS], self.parameterAsPoint(parameters, self.START_POINT, context), parameters[self.FACILITIES], speed, tolerance, unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context)), context, feedback)
             return {self.OUTPUT: result["OUTPUT"]}
-
         if self.algorithm_name == "calculate_facility_suitability":
             service_type_field = self.parameterAsString(parameters, self.SERVICE_TYPE_FIELD, context)
             if not service_type_field:
@@ -200,7 +229,6 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
                 raise QgsProcessingException("服务距离必须大于 0。")
             result = generate_facility_buffers(parameters[self.FACILITIES], distance, unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context)), context, feedback)
             return {self.OUTPUT: result["OUTPUT"]}
-
         output_folder = self.parameterAsString(parameters, self.OUTPUT_FOLDER, context)
         summary_path = write_run_summary(output_folder, f"{ACCESSIBILITY_PROVIDER_ID}:{self.algorithm_name}", outputs=[], warnings=["当前阶段仅验证插件工作流入口和摘要契约，未生成空间分析结果。"])
         feedback.pushInfo(f"已写入运行摘要：{summary_path}")
