@@ -32,6 +32,7 @@ from core.standardization.vector import (
     standardize_tracks,
 )
 from core.workflows.standardization import run_standardization_workflow
+from core.workflows.terrain import run_terrain_workflow
 from core.terrain.basic_terrain import extract_aspect, extract_contours, extract_hillshade, extract_slope
 from core.terrain.elevation_compare import compare_dem_with_elevation_points
 
@@ -125,6 +126,9 @@ class RegisteredTerrainHydroAlgorithm(QgsProcessingAlgorithm):
         if self.algorithm_name == "run_standardization_workflow":
             self._add_standardization_workflow_parameters()
             return
+        if self.algorithm_name == "run_terrain_workflow":
+            self._add_terrain_workflow_parameters()
+            return
         if self.algorithm_name in self.STANDARDIZATION_ALGORITHMS:
             self._add_standardization_parameters()
             return
@@ -175,6 +179,25 @@ class RegisteredTerrainHydroAlgorithm(QgsProcessingAlgorithm):
             return {self.OUTPUT_FOLDER: result["OUTPUT_FOLDER"]}
         if self.algorithm_name in self.STANDARDIZATION_ALGORITHMS:
             return self._run_standardization(parameters, context, feedback)
+        if self.algorithm_name == "run_terrain_workflow":
+            measured_field = self.parameterAsString(parameters, self.MEASURED_FIELD, context)
+            contour_interval = self.parameterAsDouble(parameters, self.INTERVAL, context)
+            if not measured_field or contour_interval <= 0:
+                raise QgsProcessingException("必须选择实测高程字段，且等高距必须大于 0。")
+            result = run_terrain_workflow(
+                parameters[self.DEM],
+                parameters[self.ELEVATION_POINTS],
+                measured_field,
+                self.parameterAsString(parameters, self.OUTPUT_FOLDER, context),
+                self.parameterAsDouble(parameters, self.Z_FACTOR, context),
+                self.parameterAsDouble(parameters, self.AZIMUTH, context),
+                self.parameterAsDouble(parameters, self.VERTICAL_ANGLE, context),
+                contour_interval,
+                context,
+                feedback,
+            )
+            feedback.pushInfo(f"已写入地形工作流摘要：{result['SUMMARY']}")
+            return {self.OUTPUT_FOLDER: result["OUTPUT_FOLDER"]}
         if self.algorithm_name in self.TERRAIN_ALGORITHMS:
             output = unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context))
             dem_layer = parameters[self.DEM]
@@ -206,6 +229,17 @@ class RegisteredTerrainHydroAlgorithm(QgsProcessingAlgorithm):
         return {self.OUTPUT_FOLDER: output_folder}
 
 
+
+    def _add_terrain_workflow_parameters(self):
+        """函数含义：声明地形 workflow 输入参数；上游由 initAlgorithm 处理 run_terrain_workflow 时调用；下游让用户一次生成坡度、坡向、晕渲、等高线和高程校核；风险点是 Z 因子和等高距会直接影响栅格与等高线结果。"""
+        self.addParameter(QgsProcessingParameterRasterLayer(self.DEM, "DEM 栅格"))
+        self.addParameter(QgsProcessingParameterFeatureSource(self.ELEVATION_POINTS, "高程点图层", [QgsProcessing.TypeVectorPoint]))
+        self.addParameter(QgsProcessingParameterField(self.MEASURED_FIELD, "实测高程字段", type=QgsProcessingParameterField.Numeric, parentLayerParameterName=self.ELEVATION_POINTS))
+        self.addParameter(QgsProcessingParameterNumber(self.Z_FACTOR, "Z 因子", type=QgsProcessingParameterNumber.Double, defaultValue=1.0))
+        self.addParameter(QgsProcessingParameterNumber(self.AZIMUTH, "光照方位角", type=QgsProcessingParameterNumber.Double, defaultValue=315.0))
+        self.addParameter(QgsProcessingParameterNumber(self.VERTICAL_ANGLE, "光照高度角", type=QgsProcessingParameterNumber.Double, defaultValue=45.0))
+        self.addParameter(QgsProcessingParameterNumber(self.INTERVAL, "等高距", type=QgsProcessingParameterNumber.Double, defaultValue=10.0, minValue=0.0001))
+        self.addParameter(QgsProcessingParameterFolderDestination(self.OUTPUT_FOLDER, "输出目录"))
     def _add_standardization_workflow_parameters(self):
         """函数含义：声明一键标准化 workflow 输入参数；上游由 initAlgorithm 处理 run_standardization_workflow 时调用；下游让用户显式选择五类业务图层和关键字段；风险点是字段不能自动猜测。"""
         self.addParameter(QgsProcessingParameterFeatureSource(self.BUILDINGS, "建筑图层", [QgsProcessing.TypeVectorPolygon]))
