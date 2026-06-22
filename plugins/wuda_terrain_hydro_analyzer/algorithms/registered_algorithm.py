@@ -31,6 +31,7 @@ from core.standardization.vector import (
     standardize_roads,
     standardize_tracks,
 )
+from core.workflows.standardization import run_standardization_workflow
 from core.terrain.basic_terrain import extract_aspect, extract_contours, extract_hillshade, extract_slope
 from core.terrain.elevation_compare import compare_dem_with_elevation_points
 
@@ -121,6 +122,9 @@ class RegisteredTerrainHydroAlgorithm(QgsProcessingAlgorithm):
             self.addParameter(QgsProcessingParameterCrs(self.TARGET_CRS, "分析 CRS", defaultValue="EPSG:4526"))
             self.addParameter(QgsProcessingParameterVectorDestination(self.OUTPUT, "转换后图层", QgsProcessing.TypeVectorAnyGeometry))
             return
+        if self.algorithm_name == "run_standardization_workflow":
+            self._add_standardization_workflow_parameters()
+            return
         if self.algorithm_name in self.STANDARDIZATION_ALGORITHMS:
             self._add_standardization_parameters()
             return
@@ -149,6 +153,26 @@ class RegisteredTerrainHydroAlgorithm(QgsProcessingAlgorithm):
         """函数含义：执行已实现的地形水文算法入口；上游由 QGIS Processing 运行器调用；下游生成真实图层、摘要或显式拒绝未实现算法；风险点是不得生成假空间分析结果。"""
         if self.algorithm_name not in self.IMPLEMENTED_ALGORITHMS:
             raise QgsProcessingException(f"{self.displayName()} 尚未在当前阶段实现真实空间分析。")
+        if self.algorithm_name == "run_standardization_workflow":
+            service_type_field = self.parameterAsString(parameters, self.SERVICE_TYPE_FIELD, context)
+            measured_field = self.parameterAsString(parameters, self.MEASURED_FIELD, context)
+            if not service_type_field or not measured_field:
+                raise QgsProcessingException("必须选择服务类型字段和实测高程字段。")
+            result = run_standardization_workflow(
+                parameters[self.BUILDINGS],
+                parameters[self.ROADS],
+                parameters[self.FACILITIES],
+                service_type_field,
+                parameters[self.ELEVATION_POINTS],
+                measured_field,
+                parameters[self.TRACKS],
+                self.parameterAsString(parameters, self.OUTPUT_FOLDER, context),
+                context,
+                feedback,
+            )
+            feedback.pushInfo(f"已写入标准数据包：{result['PACKAGE']}")
+            feedback.pushInfo(f"已写入运行摘要：{result['SUMMARY']}")
+            return {self.OUTPUT_FOLDER: result["OUTPUT_FOLDER"]}
         if self.algorithm_name in self.STANDARDIZATION_ALGORITHMS:
             return self._run_standardization(parameters, context, feedback)
         if self.algorithm_name in self.TERRAIN_ALGORITHMS:
@@ -181,6 +205,17 @@ class RegisteredTerrainHydroAlgorithm(QgsProcessingAlgorithm):
         feedback.pushInfo(f"已写入运行摘要：{summary_path}")
         return {self.OUTPUT_FOLDER: output_folder}
 
+
+    def _add_standardization_workflow_parameters(self):
+        """函数含义：声明一键标准化 workflow 输入参数；上游由 initAlgorithm 处理 run_standardization_workflow 时调用；下游让用户显式选择五类业务图层和关键字段；风险点是字段不能自动猜测。"""
+        self.addParameter(QgsProcessingParameterFeatureSource(self.BUILDINGS, "建筑图层", [QgsProcessing.TypeVectorPolygon]))
+        self.addParameter(QgsProcessingParameterFeatureSource(self.ROADS, "道路线图层", [QgsProcessing.TypeVectorLine]))
+        self.addParameter(QgsProcessingParameterFeatureSource(self.FACILITIES, "POI 点图层", [QgsProcessing.TypeVectorPoint]))
+        self.addParameter(QgsProcessingParameterField(self.SERVICE_TYPE_FIELD, "服务类型字段", type=QgsProcessingParameterField.Any, parentLayerParameterName=self.FACILITIES))
+        self.addParameter(QgsProcessingParameterFeatureSource(self.ELEVATION_POINTS, "高程点图层", [QgsProcessing.TypeVectorPoint]))
+        self.addParameter(QgsProcessingParameterField(self.MEASURED_FIELD, "实测高程字段", type=QgsProcessingParameterField.Numeric, parentLayerParameterName=self.ELEVATION_POINTS))
+        self.addParameter(QgsProcessingParameterFeatureSource(self.TRACKS, "轨迹线图层", [QgsProcessing.TypeVectorLine]))
+        self.addParameter(QgsProcessingParameterFolderDestination(self.OUTPUT_FOLDER, "输出目录"))
     def _add_standardization_parameters(self):
         """函数含义：为标准化算法声明输入输出参数；上游由 initAlgorithm 分发调用；下游生成 QGIS 参数表单；风险点是字段映射仍是基础版本。"""
         if self.algorithm_name == "standardize_buildings":
