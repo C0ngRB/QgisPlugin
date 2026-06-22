@@ -7,6 +7,7 @@ from qgis.core import (
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterFolderDestination,
     QgsProcessingParameterNumber,
+    QgsProcessingParameterPoint,
 )
 
 from ..support.core_path import ensure_core_import_path
@@ -16,6 +17,7 @@ ensure_core_import_path(__file__)
 from core.accessibility.facility_buffers import generate_facility_buffers
 from core.accessibility.nearest import calculate_nearest_facility
 from core.accessibility.network import build_network_cost, calculate_road_length
+from core.accessibility.routing import calculate_service_area, calculate_shortest_path
 from core.io.qgis_output import unique_qgis_output_path
 from core.registry.algorithms import ACCESSIBILITY_PROVIDER_ID, algorithm_display_name
 from core.reporting.summary import write_run_summary
@@ -28,7 +30,10 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
     FACILITIES = "FACILITIES"
     ROADS = "ROADS"
     SOURCE = "SOURCE"
+    START_POINT = "START_POINT"
     DISTANCE = "DISTANCE"
+    TRAVEL_COST = "TRAVEL_COST"
+    TOLERANCE = "TOLERANCE"
     NEIGHBORS = "NEIGHBORS"
     DEFAULT_SPEED = "DEFAULT_SPEED"
     OUTPUT = "OUTPUT"
@@ -37,6 +42,8 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
         "build_network_cost",
         "generate_facility_buffers",
         "calculate_nearest_facility",
+        "calculate_service_area",
+        "calculate_shortest_path",
     }
     IMPLEMENTED_ALGORITHMS = VECTOR_OUTPUT_ALGORITHMS | {
         "run_standardization_workflow",
@@ -74,6 +81,10 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
             return "输入道路线图层和默认速度，输出带 length_m 与 access_cost 字段的真实线图层。"
         if self.algorithm_name == "calculate_nearest_facility":
             return "输入源图层和设施图层，输出几何最近设施校核连线；该结果不是网络路径成本。"
+        if self.algorithm_name == "calculate_service_area":
+            return "输入道路线和设施点，输出网络服务区可达线段；该结果不是面状缓冲区。"
+        if self.algorithm_name == "calculate_shortest_path":
+            return "输入道路线、起点和目标点图层，输出从起点到目标图层的最短路径线。"
         return "当前阶段提供插件注册、参数入口和运行摘要契约；真实空间分析按后续阶段在 core 中补齐。"
 
     def createInstance(self):
@@ -85,69 +96,39 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
         if self.algorithm_name in {"calculate_road_length", "build_network_cost"}:
             self._add_roads_parameter()
             if self.algorithm_name == "build_network_cost":
-                self.addParameter(
-                    QgsProcessingParameterNumber(
-                        self.DEFAULT_SPEED,
-                        "默认步行速度（千米/时）",
-                        type=QgsProcessingParameterNumber.Double,
-                        defaultValue=5.0,
-                        minValue=0.1,
-                    )
-                )
+                self._add_default_speed_parameter()
             self.addParameter(QgsProcessingParameterFeatureSink(self.OUTPUT, self.displayName(), QgsProcessing.TypeVectorLine))
             return
 
         if self.algorithm_name == "calculate_nearest_facility":
-            self.addParameter(
-                QgsProcessingParameterFeatureSource(
-                    self.SOURCE,
-                    "源图层（建筑或需求点）",
-                    [QgsProcessing.TypeVectorAnyGeometry],
-                )
-            )
-            self.addParameter(
-                QgsProcessingParameterFeatureSource(
-                    self.FACILITIES,
-                    "设施图层",
-                    [QgsProcessing.TypeVectorAnyGeometry],
-                )
-            )
-            self.addParameter(
-                QgsProcessingParameterNumber(
-                    self.NEIGHBORS,
-                    "最近设施数量",
-                    type=QgsProcessingParameterNumber.Integer,
-                    defaultValue=1,
-                    minValue=1,
-                )
-            )
-            self.addParameter(
-                QgsProcessingParameterDistance(
-                    self.DISTANCE,
-                    "最大搜索距离（0 表示不限制）",
-                    defaultValue=0.0,
-                    parentParameterName=self.SOURCE,
-                )
-            )
+            self.addParameter(QgsProcessingParameterFeatureSource(self.SOURCE, "源图层（建筑或需求点）", [QgsProcessing.TypeVectorAnyGeometry]))
+            self.addParameter(QgsProcessingParameterFeatureSource(self.FACILITIES, "设施图层", [QgsProcessing.TypeVectorAnyGeometry]))
+            self.addParameter(QgsProcessingParameterNumber(self.NEIGHBORS, "最近设施数量", type=QgsProcessingParameterNumber.Integer, defaultValue=1, minValue=1))
+            self.addParameter(QgsProcessingParameterDistance(self.DISTANCE, "最大搜索距离（0 表示不限制）", defaultValue=0.0, parentParameterName=self.SOURCE))
             self.addParameter(QgsProcessingParameterFeatureSink(self.OUTPUT, "最近设施校核连线", QgsProcessing.TypeVectorLine))
             return
 
+        if self.algorithm_name == "calculate_service_area":
+            self._add_roads_parameter()
+            self.addParameter(QgsProcessingParameterFeatureSource(self.FACILITIES, "设施点图层", [QgsProcessing.TypeVectorPoint]))
+            self.addParameter(QgsProcessingParameterNumber(self.TRAVEL_COST, "服务距离（米）", type=QgsProcessingParameterNumber.Double, defaultValue=300.0, minValue=0.001))
+            self._add_default_speed_parameter()
+            self._add_tolerance_parameter()
+            self.addParameter(QgsProcessingParameterFeatureSink(self.OUTPUT, "网络服务区线", QgsProcessing.TypeVectorLine))
+            return
+
+        if self.algorithm_name == "calculate_shortest_path":
+            self._add_roads_parameter()
+            self.addParameter(QgsProcessingParameterPoint(self.START_POINT, "起点"))
+            self.addParameter(QgsProcessingParameterFeatureSource(self.FACILITIES, "目标点图层", [QgsProcessing.TypeVectorPoint]))
+            self._add_default_speed_parameter()
+            self._add_tolerance_parameter()
+            self.addParameter(QgsProcessingParameterFeatureSink(self.OUTPUT, "最短路径线", QgsProcessing.TypeVectorLine))
+            return
+
         if self.algorithm_name == "generate_facility_buffers":
-            self.addParameter(
-                QgsProcessingParameterFeatureSource(
-                    self.FACILITIES,
-                    "设施图层（点、线或面）",
-                    [QgsProcessing.TypeVectorAnyGeometry],
-                )
-            )
-            self.addParameter(
-                QgsProcessingParameterDistance(
-                    self.DISTANCE,
-                    "服务距离",
-                    defaultValue=300.0,
-                    parentParameterName=self.FACILITIES,
-                )
-            )
+            self.addParameter(QgsProcessingParameterFeatureSource(self.FACILITIES, "设施图层（点、线或面）", [QgsProcessing.TypeVectorAnyGeometry]))
+            self.addParameter(QgsProcessingParameterDistance(self.DISTANCE, "服务距离", defaultValue=300.0, parentParameterName=self.FACILITIES))
             self.addParameter(QgsProcessingParameterFeatureSink(self.OUTPUT, "设施服务缓冲区", QgsProcessing.TypeVectorPolygon))
             return
 
@@ -174,46 +155,46 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
             max_distance = self.parameterAsDouble(parameters, self.DISTANCE, context)
             if neighbors < 1:
                 raise QgsProcessingException("最近设施数量必须至少为 1。")
-            result = calculate_nearest_facility(
-                parameters[self.SOURCE],
-                parameters[self.FACILITIES],
-                neighbors,
-                max_distance,
-                unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context)),
-                context,
-                feedback,
-            )
+            result = calculate_nearest_facility(parameters[self.SOURCE], parameters[self.FACILITIES], neighbors, max_distance, unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context)), context, feedback)
+            return {self.OUTPUT: result["OUTPUT"]}
+
+        if self.algorithm_name == "calculate_service_area":
+            travel_cost = self.parameterAsDouble(parameters, self.TRAVEL_COST, context)
+            speed = self.parameterAsDouble(parameters, self.DEFAULT_SPEED, context)
+            tolerance = self.parameterAsDouble(parameters, self.TOLERANCE, context)
+            if travel_cost <= 0 or speed <= 0 or tolerance < 0:
+                raise QgsProcessingException("服务距离和默认速度必须大于 0，捕捉容差不能小于 0。")
+            result = calculate_service_area(parameters[self.ROADS], parameters[self.FACILITIES], travel_cost, speed, tolerance, unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context)), context, feedback)
+            return {self.OUTPUT: result["OUTPUT"]}
+
+        if self.algorithm_name == "calculate_shortest_path":
+            speed = self.parameterAsDouble(parameters, self.DEFAULT_SPEED, context)
+            tolerance = self.parameterAsDouble(parameters, self.TOLERANCE, context)
+            if speed <= 0 or tolerance < 0:
+                raise QgsProcessingException("默认速度必须大于 0，捕捉容差不能小于 0。")
+            result = calculate_shortest_path(parameters[self.ROADS], self.parameterAsPoint(parameters, self.START_POINT, context), parameters[self.FACILITIES], speed, tolerance, unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context)), context, feedback)
             return {self.OUTPUT: result["OUTPUT"]}
 
         if self.algorithm_name == "generate_facility_buffers":
             distance = self.parameterAsDouble(parameters, self.DISTANCE, context)
             if distance <= 0:
                 raise QgsProcessingException("服务距离必须大于 0。")
-            result = generate_facility_buffers(
-                parameters[self.FACILITIES],
-                distance,
-                unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context)),
-                context,
-                feedback,
-            )
+            result = generate_facility_buffers(parameters[self.FACILITIES], distance, unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context)), context, feedback)
             return {self.OUTPUT: result["OUTPUT"]}
 
         output_folder = self.parameterAsString(parameters, self.OUTPUT_FOLDER, context)
-        summary_path = write_run_summary(
-            output_folder,
-            f"{ACCESSIBILITY_PROVIDER_ID}:{self.algorithm_name}",
-            outputs=[],
-            warnings=["当前阶段仅验证插件工作流入口和摘要契约，未生成空间分析结果。"],
-        )
+        summary_path = write_run_summary(output_folder, f"{ACCESSIBILITY_PROVIDER_ID}:{self.algorithm_name}", outputs=[], warnings=["当前阶段仅验证插件工作流入口和摘要契约，未生成空间分析结果。"])
         feedback.pushInfo(f"已写入运行摘要：{summary_path}")
         return {self.OUTPUT_FOLDER: output_folder}
 
     def _add_roads_parameter(self):
         """函数含义：追加道路线输入参数；上游由 initAlgorithm 为道路相关算法调用；下游统一约束输入为线图层；风险点是非米制 CRS 会导致长度和成本解释错误。"""
-        self.addParameter(
-            QgsProcessingParameterFeatureSource(
-                self.ROADS,
-                "道路线图层",
-                [QgsProcessing.TypeVectorLine],
-            )
-        )
+        self.addParameter(QgsProcessingParameterFeatureSource(self.ROADS, "道路线图层", [QgsProcessing.TypeVectorLine]))
+
+    def _add_default_speed_parameter(self):
+        """函数含义：追加默认速度参数；上游由 initAlgorithm 为网络成本和路径算法调用；下游传给 QGIS native 网络分析；风险点是默认速度只在缺少速度字段时生效。"""
+        self.addParameter(QgsProcessingParameterNumber(self.DEFAULT_SPEED, "默认步行速度（千米/时）", type=QgsProcessingParameterNumber.Double, defaultValue=5.0, minValue=0.1))
+
+    def _add_tolerance_parameter(self):
+        """函数含义：追加网络点捕捉容差参数；上游由 initAlgorithm 为网络路径算法调用；下游控制起终点吸附到道路的距离；风险点是容差过小会产生不可达结果。"""
+        self.addParameter(QgsProcessingParameterDistance(self.TOLERANCE, "道路捕捉容差", defaultValue=50.0, parentParameterName=self.ROADS))

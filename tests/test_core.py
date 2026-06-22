@@ -23,6 +23,12 @@ class CoreContractTests(unittest.TestCase):
         self.assertIn("run_hydrology_workflow", provider_algorithms(TERRAIN_HYDRO_PROVIDER_ID))
         self.assertIn("run_standardization_workflow", provider_algorithms(TERRAIN_HYDRO_PROVIDER_ID))
 
+    def test_registry_includes_accessibility_network_algorithms(self):
+        """函数含义：校验可达性网络算法已进入注册表；上游由测试执行器调用；下游保护 Provider 和 UI 能发现新增算法；风险点是不验证 QGIS native 参数兼容。"""
+        algorithms = provider_algorithms(ACCESSIBILITY_PROVIDER_ID)
+        self.assertIn("calculate_service_area", algorithms)
+        self.assertIn("calculate_shortest_path", algorithms)
+
     def test_defaults_load_service_thresholds(self):
         """函数含义：校验默认配置可读取；上游由测试执行器调用；下游防止 defaults.json 缺失或格式错误；风险点是不校验参数是否适合真实校园数据。"""
         defaults = load_defaults()
@@ -48,6 +54,7 @@ class CoreContractTests(unittest.TestCase):
             target.write_text("", encoding="utf-8")
             output = unique_qgis_output_path(f"{target}|layername=test")
             self.assertTrue(output.endswith("result_001.gpkg|layername=test"))
+
     def test_write_run_summary_records_real_output_names(self):
         """函数含义：校验运行摘要记录输出和模式；上游由测试执行器调用；下游保证课程验收可追踪；风险点是不验证 QGIS 图层加载。"""
         with tempfile.TemporaryDirectory() as temp_dir:
