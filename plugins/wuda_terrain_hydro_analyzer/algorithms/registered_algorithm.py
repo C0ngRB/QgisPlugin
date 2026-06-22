@@ -2,6 +2,8 @@ from qgis.core import (
     QgsProcessing,
     QgsProcessingAlgorithm,
     QgsProcessingException,
+    QgsProcessingParameterFeatureSource,
+    QgsProcessingParameterField,
     QgsProcessingParameterFolderDestination,
     QgsProcessingParameterNumber,
     QgsProcessingParameterRasterDestination,
@@ -18,6 +20,7 @@ from core.io.qgis_output import unique_qgis_output_path
 from core.registry.algorithms import TERRAIN_HYDRO_PROVIDER_ID, algorithm_display_name
 from core.reporting.summary import write_run_summary
 from core.terrain.basic_terrain import extract_aspect, extract_contours, extract_hillshade, extract_slope
+from core.terrain.elevation_compare import compare_dem_with_elevation_points
 
 
 class RegisteredTerrainHydroAlgorithm(QgsProcessingAlgorithm):
@@ -25,13 +28,15 @@ class RegisteredTerrainHydroAlgorithm(QgsProcessingAlgorithm):
 
     OUTPUT_FOLDER = "OUTPUT_FOLDER"
     DEM = "DEM"
+    ELEVATION_POINTS = "ELEVATION_POINTS"
+    MEASURED_FIELD = "MEASURED_FIELD"
     Z_FACTOR = "Z_FACTOR"
     AZIMUTH = "AZIMUTH"
     VERTICAL_ANGLE = "VERTICAL_ANGLE"
     INTERVAL = "INTERVAL"
     OUTPUT = "OUTPUT"
     TERRAIN_ALGORITHMS = {"extract_slope", "extract_aspect", "extract_hillshade", "extract_contours"}
-    IMPLEMENTED_ALGORITHMS = TERRAIN_ALGORITHMS | {"check_saga_provider", "run_terrain_workflow", "run_hydrology_workflow"}
+    IMPLEMENTED_ALGORITHMS = TERRAIN_ALGORITHMS | {"compare_dem_with_elevation_points", "check_saga_provider", "run_terrain_workflow", "run_hydrology_workflow"}
 
     def __init__(self, algorithm_name):
         """函数含义：绑定单个注册算法名；上游由 Provider 遍历 core 注册表调用；下游让同一个薄类承载多个算法入口；风险点是 algorithm_name 必须来自注册表。"""
@@ -58,6 +63,8 @@ class RegisteredTerrainHydroAlgorithm(QgsProcessingAlgorithm):
         """函数含义：返回算法帮助文本；上游由 QGIS 参数面板展示；下游说明当前算法能力边界；风险点是不能承诺尚未实现的真实空间计算。"""
         if self.algorithm_name in self.TERRAIN_ALGORITHMS:
             return "输入 DEM 栅格，输出真实地形分析图层；坡度、坡向和晕渲输出 GeoTIFF，等高线输出矢量线图层。"
+        if self.algorithm_name == "compare_dem_with_elevation_points":
+            return "输入 DEM 和带实测高程字段的点图层，输出 DEM 采样值与高程误差字段。"
         return "当前阶段提供插件注册、SAGA 检测入口和运行摘要契约；真实水文分析按后续阶段在 core 中补齐。"
 
     def createInstance(self):
@@ -69,50 +76,22 @@ class RegisteredTerrainHydroAlgorithm(QgsProcessingAlgorithm):
         if self.algorithm_name in self.TERRAIN_ALGORITHMS:
             self.addParameter(QgsProcessingParameterRasterLayer(self.DEM, "DEM 栅格"))
             if self.algorithm_name in {"extract_slope", "extract_aspect", "extract_hillshade"}:
-                self.addParameter(
-                    QgsProcessingParameterNumber(
-                        self.Z_FACTOR,
-                        "Z 因子",
-                        type=QgsProcessingParameterNumber.Double,
-                        defaultValue=1.0,
-                    )
-                )
+                self.addParameter(QgsProcessingParameterNumber(self.Z_FACTOR, "Z 因子", type=QgsProcessingParameterNumber.Double, defaultValue=1.0))
             if self.algorithm_name == "extract_hillshade":
-                self.addParameter(
-                    QgsProcessingParameterNumber(
-                        self.AZIMUTH,
-                        "光照方位角",
-                        type=QgsProcessingParameterNumber.Double,
-                        defaultValue=315.0,
-                    )
-                )
-                self.addParameter(
-                    QgsProcessingParameterNumber(
-                        self.VERTICAL_ANGLE,
-                        "光照高度角",
-                        type=QgsProcessingParameterNumber.Double,
-                        defaultValue=45.0,
-                    )
-                )
+                self.addParameter(QgsProcessingParameterNumber(self.AZIMUTH, "光照方位角", type=QgsProcessingParameterNumber.Double, defaultValue=315.0))
+                self.addParameter(QgsProcessingParameterNumber(self.VERTICAL_ANGLE, "光照高度角", type=QgsProcessingParameterNumber.Double, defaultValue=45.0))
             if self.algorithm_name == "extract_contours":
-                self.addParameter(
-                    QgsProcessingParameterNumber(
-                        self.INTERVAL,
-                        "等高距",
-                        type=QgsProcessingParameterNumber.Double,
-                        defaultValue=10.0,
-                        minValue=0.0001,
-                    )
-                )
-                self.addParameter(
-                    QgsProcessingParameterVectorDestination(
-                        self.OUTPUT,
-                        "等高线",
-                        QgsProcessing.TypeVectorLine,
-                    )
-                )
+                self.addParameter(QgsProcessingParameterNumber(self.INTERVAL, "等高距", type=QgsProcessingParameterNumber.Double, defaultValue=10.0, minValue=0.0001))
+                self.addParameter(QgsProcessingParameterVectorDestination(self.OUTPUT, "等高线", QgsProcessing.TypeVectorLine))
                 return
             self.addParameter(QgsProcessingParameterRasterDestination(self.OUTPUT, self.displayName()))
+            return
+
+        if self.algorithm_name == "compare_dem_with_elevation_points":
+            self.addParameter(QgsProcessingParameterRasterLayer(self.DEM, "DEM 栅格"))
+            self.addParameter(QgsProcessingParameterFeatureSource(self.ELEVATION_POINTS, "高程点图层", [QgsProcessing.TypeVectorPoint]))
+            self.addParameter(QgsProcessingParameterField(self.MEASURED_FIELD, "实测高程字段", type=QgsProcessingParameterField.Numeric, parentLayerParameterName=self.ELEVATION_POINTS))
+            self.addParameter(QgsProcessingParameterVectorDestination(self.OUTPUT, "DEM 与高程点对比", QgsProcessing.TypeVectorPoint))
             return
 
         self.addParameter(QgsProcessingParameterFolderDestination(self.OUTPUT_FOLDER, "输出目录"))
@@ -130,20 +109,19 @@ class RegisteredTerrainHydroAlgorithm(QgsProcessingAlgorithm):
             elif self.algorithm_name == "extract_aspect":
                 result = extract_aspect(dem_layer, self.parameterAsDouble(parameters, self.Z_FACTOR, context), output, context, feedback)
             elif self.algorithm_name == "extract_hillshade":
-                result = extract_hillshade(
-                    dem_layer,
-                    self.parameterAsDouble(parameters, self.Z_FACTOR, context),
-                    self.parameterAsDouble(parameters, self.AZIMUTH, context),
-                    self.parameterAsDouble(parameters, self.VERTICAL_ANGLE, context),
-                    output,
-                    context,
-                    feedback,
-                )
+                result = extract_hillshade(dem_layer, self.parameterAsDouble(parameters, self.Z_FACTOR, context), self.parameterAsDouble(parameters, self.AZIMUTH, context), self.parameterAsDouble(parameters, self.VERTICAL_ANGLE, context), output, context, feedback)
             else:
                 interval = self.parameterAsDouble(parameters, self.INTERVAL, context)
                 if interval <= 0:
                     raise QgsProcessingException("等高距必须大于 0。")
                 result = extract_contours(dem_layer, interval, output, context, feedback)
+            return {self.OUTPUT: result["OUTPUT"]}
+
+        if self.algorithm_name == "compare_dem_with_elevation_points":
+            measured_field = self.parameterAsString(parameters, self.MEASURED_FIELD, context)
+            if not measured_field:
+                raise QgsProcessingException("必须选择实测高程字段。")
+            result = compare_dem_with_elevation_points(parameters[self.ELEVATION_POINTS], measured_field, parameters[self.DEM], unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context)), context, feedback)
             return {self.OUTPUT: result["OUTPUT"]}
 
         output_folder = self.parameterAsString(parameters, self.OUTPUT_FOLDER, context)
@@ -152,12 +130,6 @@ class RegisteredTerrainHydroAlgorithm(QgsProcessingAlgorithm):
             is_available = saga_provider_available()
             warnings = [] if is_available else ["SAGA Provider 不可用，后续真实水文流程应进入 demo/sample 模式。"]
 
-        summary_path = write_run_summary(
-            output_folder,
-            f"{TERRAIN_HYDRO_PROVIDER_ID}:{self.algorithm_name}",
-            outputs=[],
-            mode="real",
-            warnings=warnings,
-        )
+        summary_path = write_run_summary(output_folder, f"{TERRAIN_HYDRO_PROVIDER_ID}:{self.algorithm_name}", outputs=[], mode="real", warnings=warnings)
         feedback.pushInfo(f"已写入运行摘要：{summary_path}")
         return {self.OUTPUT_FOLDER: output_folder}

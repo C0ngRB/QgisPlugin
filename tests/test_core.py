@@ -29,6 +29,10 @@ class CoreContractTests(unittest.TestCase):
         self.assertIn("calculate_service_area", algorithms)
         self.assertIn("calculate_shortest_path", algorithms)
 
+    def test_registry_includes_terrain_elevation_comparison(self):
+        """函数含义：校验 DEM 高程点对比算法已进入注册表；上游由测试执行器调用；下游保护地形插件能发现该算法；风险点是不验证 QGIS 采样结果。"""
+        algorithms = provider_algorithms(TERRAIN_HYDRO_PROVIDER_ID)
+        self.assertIn("compare_dem_with_elevation_points", algorithms)
     def test_defaults_load_service_thresholds(self):
         """函数含义：校验默认配置可读取；上游由测试执行器调用；下游防止 defaults.json 缺失或格式错误；风险点是不校验参数是否适合真实校园数据。"""
         defaults = load_defaults()
