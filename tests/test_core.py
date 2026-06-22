@@ -29,6 +29,10 @@ class CoreContractTests(unittest.TestCase):
         self.assertIn("calculate_service_area", algorithms)
         self.assertIn("calculate_shortest_path", algorithms)
 
+    def test_registry_includes_facility_suitability(self):
+        """函数含义：校验设施适宜性算法已进入注册表；上游由测试执行器调用；下游保护可达性插件能发现 ADR 核心评价算法；风险点是不验证 QGIS 空间计算。"""
+        algorithms = provider_algorithms(ACCESSIBILITY_PROVIDER_ID)
+        self.assertIn("calculate_facility_suitability", algorithms)
     def test_registry_includes_terrain_elevation_comparison(self):
         """函数含义：校验 DEM 高程点对比算法已进入注册表；上游由测试执行器调用；下游保护地形插件能发现该算法；风险点是不验证 QGIS 采样结果。"""
         algorithms = provider_algorithms(TERRAIN_HYDRO_PROVIDER_ID)

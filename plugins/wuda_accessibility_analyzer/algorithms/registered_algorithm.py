@@ -4,6 +4,7 @@ from qgis.core import (
     QgsProcessingException,
     QgsProcessingParameterDistance,
     QgsProcessingParameterFeatureSink,
+    QgsProcessingParameterField,
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterFolderDestination,
     QgsProcessingParameterNumber,
@@ -18,6 +19,7 @@ from core.accessibility.facility_buffers import generate_facility_buffers
 from core.accessibility.nearest import calculate_nearest_facility
 from core.accessibility.network import build_network_cost, calculate_road_length
 from core.accessibility.routing import calculate_service_area, calculate_shortest_path
+from core.accessibility.suitability import calculate_facility_suitability
 from core.io.qgis_output import unique_qgis_output_path
 from core.registry.algorithms import ACCESSIBILITY_PROVIDER_ID, algorithm_display_name
 from core.reporting.summary import write_run_summary
@@ -27,10 +29,12 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
     """类含义：可达性插件通用薄 Algorithm；上游由 Provider 按注册表创建；下游把执行契约交给 core；风险点是当前阶段未实现的算法必须显式失败。"""
 
     OUTPUT_FOLDER = "OUTPUT_FOLDER"
+    BUILDINGS = "BUILDINGS"
     FACILITIES = "FACILITIES"
     ROADS = "ROADS"
     SOURCE = "SOURCE"
     START_POINT = "START_POINT"
+    SERVICE_TYPE_FIELD = "SERVICE_TYPE_FIELD"
     DISTANCE = "DISTANCE"
     TRAVEL_COST = "TRAVEL_COST"
     TOLERANCE = "TOLERANCE"
@@ -44,6 +48,7 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
         "calculate_nearest_facility",
         "calculate_service_area",
         "calculate_shortest_path",
+        "calculate_facility_suitability",
     }
     IMPLEMENTED_ALGORITHMS = VECTOR_OUTPUT_ALGORITHMS | {
         "run_standardization_workflow",
@@ -85,6 +90,8 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
             return "输入道路线和设施点，输出网络服务区可达线段；该结果不是面状缓冲区。"
         if self.algorithm_name == "calculate_shortest_path":
             return "输入道路线、起点和目标点图层，输出从起点到目标图层的最短路径线。"
+        if self.algorithm_name == "calculate_facility_suitability":
+            return "输入建筑和设施点，按设施类型输出最近设施近似适宜性评价长表。"
         return "当前阶段提供插件注册、参数入口和运行摘要契约；真实空间分析按后续阶段在 core 中补齐。"
 
     def createInstance(self):
@@ -126,6 +133,12 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
             self.addParameter(QgsProcessingParameterFeatureSink(self.OUTPUT, "最短路径线", QgsProcessing.TypeVectorLine))
             return
 
+        if self.algorithm_name == "calculate_facility_suitability":
+            self.addParameter(QgsProcessingParameterFeatureSource(self.BUILDINGS, "建筑图层", [QgsProcessing.TypeVectorAnyGeometry]))
+            self.addParameter(QgsProcessingParameterFeatureSource(self.FACILITIES, "设施点图层", [QgsProcessing.TypeVectorPoint]))
+            self.addParameter(QgsProcessingParameterField(self.SERVICE_TYPE_FIELD, "设施类型字段", type=QgsProcessingParameterField.Any, parentLayerParameterName=self.FACILITIES))
+            self.addParameter(QgsProcessingParameterFeatureSink(self.OUTPUT, "设施适宜性评价", QgsProcessing.TypeVectorLine))
+            return
         if self.algorithm_name == "generate_facility_buffers":
             self.addParameter(QgsProcessingParameterFeatureSource(self.FACILITIES, "设施图层（点、线或面）", [QgsProcessing.TypeVectorAnyGeometry]))
             self.addParameter(QgsProcessingParameterDistance(self.DISTANCE, "服务距离", defaultValue=300.0, parentParameterName=self.FACILITIES))
@@ -175,6 +188,12 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
             result = calculate_shortest_path(parameters[self.ROADS], self.parameterAsPoint(parameters, self.START_POINT, context), parameters[self.FACILITIES], speed, tolerance, unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context)), context, feedback)
             return {self.OUTPUT: result["OUTPUT"]}
 
+        if self.algorithm_name == "calculate_facility_suitability":
+            service_type_field = self.parameterAsString(parameters, self.SERVICE_TYPE_FIELD, context)
+            if not service_type_field:
+                raise QgsProcessingException("必须选择设施类型字段。")
+            result = calculate_facility_suitability(parameters[self.BUILDINGS], parameters[self.FACILITIES], service_type_field, unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context)), context, feedback)
+            return {self.OUTPUT: result["OUTPUT"]}
         if self.algorithm_name == "generate_facility_buffers":
             distance = self.parameterAsDouble(parameters, self.DISTANCE, context)
             if distance <= 0:
