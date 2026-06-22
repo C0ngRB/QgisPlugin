@@ -23,3 +23,8 @@
 ## 已实现可视化算法
 
 - wuda_accessibility_analyzer:generate_facility_buffers：输入设施图层和服务距离，输出真实缓冲区面图层。
+
+- wuda_terrain_hydro_analyzer:extract_slope：输入 DEM，输出真实坡度 GeoTIFF。
+- wuda_terrain_hydro_analyzer:extract_aspect：输入 DEM，输出真实坡向 GeoTIFF。
+- wuda_terrain_hydro_analyzer:extract_hillshade：输入 DEM，输出真实晕渲 GeoTIFF。
+- wuda_terrain_hydro_analyzer:extract_contours：输入 DEM 和等高距，输出带 elevation_m 字段的等高线图层。
