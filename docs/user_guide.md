@@ -19,3 +19,7 @@
 1. 补齐 `WudaAccessibilityAnalyzer` 的标准化和可达性 core 流程。
 2. 补齐 `WudaTerrainHydroAnalyzer` 的地形和 SAGA 水文 core 流程。
 3. 用 QGIS 手工验收清单验证插件安装、菜单、Provider、workflow 和 demo 模式。
+
+## 已实现可视化算法
+
+- wuda_accessibility_analyzer:generate_facility_buffers：输入设施图层和服务距离，输出真实缓冲区面图层。
