@@ -35,6 +35,7 @@ from core.standardization.vector import (
     standardize_roads,
     standardize_tracks,
 )
+from core.workflows.accessibility import run_accessibility_workflow
 from core.workflows.standardization import run_standardization_workflow
 
 
@@ -140,6 +141,9 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
         if self.algorithm_name == "run_standardization_workflow":
             self._add_standardization_workflow_parameters()
             return
+        if self.algorithm_name == "run_accessibility_workflow":
+            self._add_accessibility_workflow_parameters()
+            return
         if self.algorithm_name in self.STANDARDIZATION_ALGORITHMS:
             self._add_standardization_parameters()
             return
@@ -211,6 +215,27 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
             return {self.OUTPUT_FOLDER: result["OUTPUT_FOLDER"]}
         if self.algorithm_name in self.STANDARDIZATION_ALGORITHMS:
             return self._run_standardization(parameters, context, feedback)
+        if self.algorithm_name == "run_accessibility_workflow":
+            service_type_field = self.parameterAsString(parameters, self.SERVICE_TYPE_FIELD, context)
+            travel_cost = self.parameterAsDouble(parameters, self.TRAVEL_COST, context)
+            speed = self.parameterAsDouble(parameters, self.DEFAULT_SPEED, context)
+            tolerance = self.parameterAsDouble(parameters, self.TOLERANCE, context)
+            if not service_type_field or travel_cost <= 0 or speed <= 0 or tolerance < 0:
+                raise QgsProcessingException("必须选择服务类型字段；服务距离和默认速度必须大于 0，捕捉容差不能小于 0。")
+            result = run_accessibility_workflow(
+                parameters[self.BUILDINGS],
+                parameters[self.ROADS],
+                parameters[self.FACILITIES],
+                service_type_field,
+                self.parameterAsString(parameters, self.OUTPUT_FOLDER, context),
+                travel_cost,
+                speed,
+                tolerance,
+                context,
+                feedback,
+            )
+            feedback.pushInfo(f"已写入可达性工作流摘要：{result['SUMMARY']}")
+            return {self.OUTPUT_FOLDER: result["OUTPUT_FOLDER"]}
         if self.algorithm_name == "calculate_road_length":
             result = calculate_road_length(parameters[self.ROADS], unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context)), context, feedback)
             return {self.OUTPUT: result["OUTPUT"]}
@@ -260,6 +285,17 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
         return {self.OUTPUT_FOLDER: output_folder}
 
 
+
+    def _add_accessibility_workflow_parameters(self):
+        """函数含义：声明可达性 workflow 输入参数；上游由 initAlgorithm 处理 run_accessibility_workflow 时调用；下游让用户一次生成适宜性、服务区、供需和最近设施结果；风险点是首版输出为近似 E2SFCA 而非完整 OD 矩阵。"""
+        self.addParameter(QgsProcessingParameterFeatureSource(self.BUILDINGS, "建筑图层", [QgsProcessing.TypeVectorAnyGeometry]))
+        self.addParameter(QgsProcessingParameterFeatureSource(self.ROADS, "道路线图层", [QgsProcessing.TypeVectorLine]))
+        self.addParameter(QgsProcessingParameterFeatureSource(self.FACILITIES, "设施点图层", [QgsProcessing.TypeVectorPoint]))
+        self.addParameter(QgsProcessingParameterField(self.SERVICE_TYPE_FIELD, "设施类型字段", type=QgsProcessingParameterField.Any, parentLayerParameterName=self.FACILITIES))
+        self.addParameter(QgsProcessingParameterNumber(self.TRAVEL_COST, "服务距离（米）", type=QgsProcessingParameterNumber.Double, defaultValue=300.0, minValue=0.001))
+        self._add_default_speed_parameter()
+        self._add_tolerance_parameter()
+        self.addParameter(QgsProcessingParameterFolderDestination(self.OUTPUT_FOLDER, "输出目录"))
     def _add_standardization_workflow_parameters(self):
         """函数含义：声明一键标准化 workflow 输入参数；上游由 initAlgorithm 处理 run_standardization_workflow 时调用；下游让用户显式选择五类业务图层和关键字段；风险点是字段不能自动猜测。"""
         self.addParameter(QgsProcessingParameterFeatureSource(self.BUILDINGS, "建筑图层", [QgsProcessing.TypeVectorPolygon]))
