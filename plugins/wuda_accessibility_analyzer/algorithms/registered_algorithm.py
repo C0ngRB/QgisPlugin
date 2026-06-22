@@ -6,6 +6,7 @@ from qgis.core import (
     QgsProcessingParameterDistance,
     QgsProcessingParameterFeatureSink,
     QgsProcessingParameterField,
+    QgsProcessingParameterFileDestination,
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterFolderDestination,
     QgsProcessingParameterNumber,
@@ -24,6 +25,7 @@ from core.accessibility.suitability import calculate_facility_suitability
 from core.io.qgis_output import unique_qgis_output_path
 from core.registry.algorithms import ACCESSIBILITY_PROVIDER_ID, algorithm_display_name
 from core.reporting.summary import write_run_summary
+from core.standardization.geopackage import write_standard_geopackage
 from core.standardization.validation import validate_input_layer
 from core.standardization.vector import (
     reproject_to_analysis_crs,
@@ -64,6 +66,7 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
         "standardize_pois",
         "standardize_elevation_points",
         "standardize_tracks",
+        "write_standard_geopackage",
     }
     VECTOR_OUTPUT_ALGORITHMS = {
         "calculate_road_length",
@@ -107,6 +110,7 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
             "standardize_pois": "输入 POI 点图层和服务类型字段，输出带 service_type、capacity、weight 的标准 POI。",
             "standardize_elevation_points": "输入高程点和实测高程字段，输出带 measured_elev_m 的标准高程点。",
             "standardize_tracks": "输入轨迹线图层，输出带 length_m 和 source_method 的标准轨迹。",
+            "write_standard_geopackage": "输入标准化业务图层，输出 standard_data.gpkg。",
             "generate_facility_buffers": "输入设施图层和服务距离，输出真实缓冲区面图层；距离单位取决于输入图层 CRS。",
             "calculate_road_length": "输入道路线图层，输出带 length_m 字段的真实线图层；长度单位取决于输入 CRS。",
             "build_network_cost": "输入道路线图层和默认速度，输出带 length_m 与 access_cost 字段的真实线图层。",
@@ -248,6 +252,13 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
             self.addParameter(QgsProcessingParameterFeatureSource(self.ELEVATION_POINTS, "高程点图层", [QgsProcessing.TypeVectorPoint]))
             self.addParameter(QgsProcessingParameterField(self.MEASURED_FIELD, "实测高程字段", type=QgsProcessingParameterField.Numeric, parentLayerParameterName=self.ELEVATION_POINTS))
             self.addParameter(QgsProcessingParameterFeatureSink(self.OUTPUT, "标准化高程点", QgsProcessing.TypeVectorPoint))
+        elif self.algorithm_name == "write_standard_geopackage":
+            self.addParameter(QgsProcessingParameterFeatureSource(self.BUILDINGS, "标准建筑图层", [QgsProcessing.TypeVectorAnyGeometry]))
+            self.addParameter(QgsProcessingParameterFeatureSource(self.ROADS, "标准道路图层", [QgsProcessing.TypeVectorLine]))
+            self.addParameter(QgsProcessingParameterFeatureSource(self.FACILITIES, "标准 POI 图层", [QgsProcessing.TypeVectorPoint]))
+            self.addParameter(QgsProcessingParameterFeatureSource(self.ELEVATION_POINTS, "标准高程点图层", [QgsProcessing.TypeVectorPoint]))
+            self.addParameter(QgsProcessingParameterFeatureSource(self.TRACKS, "标准轨迹图层", [QgsProcessing.TypeVectorLine]))
+            self.addParameter(QgsProcessingParameterFileDestination(self.OUTPUT, "标准 GeoPackage", "GeoPackage (*.gpkg)", defaultValue="standard_data.gpkg"))
         elif self.algorithm_name == "standardize_tracks":
             self.addParameter(QgsProcessingParameterFeatureSource(self.TRACKS, "轨迹线图层", [QgsProcessing.TypeVectorLine]))
             self.addParameter(QgsProcessingParameterFeatureSink(self.OUTPUT, "标准化轨迹", QgsProcessing.TypeVectorLine))
@@ -282,6 +293,18 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
             if not measured_field:
                 raise QgsProcessingException("必须选择实测高程字段。")
             result = standardize_elevation_points(parameters[self.ELEVATION_POINTS], measured_field, unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context)), context, feedback)
+            return {self.OUTPUT: result["OUTPUT"]}
+        if self.algorithm_name == "write_standard_geopackage":
+            result = write_standard_geopackage(
+                parameters[self.BUILDINGS],
+                parameters[self.ROADS],
+                parameters[self.FACILITIES],
+                parameters[self.ELEVATION_POINTS],
+                parameters[self.TRACKS],
+                self.parameterAsFileOutput(parameters, self.OUTPUT, context),
+                context,
+                feedback,
+            )
             return {self.OUTPUT: result["OUTPUT"]}
         result = standardize_tracks(parameters[self.TRACKS], unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context)), context, feedback)
         return {self.OUTPUT: result["OUTPUT"]}
