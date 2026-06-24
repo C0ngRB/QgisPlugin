@@ -40,4 +40,4 @@ python -m unittest discover -s tests
 python scripts/build_plugins.py
 ```
 
-QGIS Desktop 运行时验收见 `docs/qgis_manual_checklist.md`。
+QGIS Desktop 运行时验收见 `docs/qgis_manual_checklist.md`，也可以运行：`"C:\Program Files\QGIS 3.40.0\bin\python-qgis.bat" tests\qgis_runtime_check.py`。

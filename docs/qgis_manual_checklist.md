@@ -57,3 +57,6 @@
 - [ ] 水文算法不调用 GRASS、WhiteboxTools 或欧氏距离替代 SAGA。
 - [ ] 输出文件冲突时追加 `_001`、`_002` 后缀，不覆盖已有结果。
 - [ ] 插件壳不直接实现空间分析，业务逻辑位于 `core/`。
+## 自动化运行时验收
+
+- [ ] 可运行 `"C:\Program Files\QGIS 3.40.0\bin\python-qgis.bat" tests\qgis_runtime_check.py`，并获得 JSON 验收报告。
