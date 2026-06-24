@@ -1,6 +1,6 @@
 # wuda_spatial_analysis_toolkit
 
-本目录按 ADR 构建武汉大学 GIS 实践课程 QGIS 空间分析自动化插件项目。
+武汉大学 GIS 实践课程 QGIS 空间分析自动化插件项目，按 ADR 交付两个可独立安装的 QGIS 插件和共享 core。
 
 ## 结构
 
@@ -27,6 +27,17 @@ python scripts/build_plugins.py
 - `dist/release_manifest.json`
 - `dist/build_report.txt`
 
-## 当前阶段
+## 当前能力
 
-已完成 ADR 要求的两插件工程骨架、共享 core、算法注册表、PyQt 向导入口、构建脚本、基础测试和文档。真实空间分析业务逻辑按 ADR 后续阶段继续补入 `core/`。
+- `WudaAccessibilityAnalyzer`：标准化、GeoPackage 打包、道路成本、设施缓冲、最近设施、网络服务区、最短路径、设施适宜性和可达性 workflow。
+- `WudaTerrainHydroAnalyzer`：标准化、GeoPackage 打包、坡度、坡向、晕渲、等高线、DEM 高程点对比、地形 workflow、水文 SAGA 契约和无 SAGA demo 摘要模式。
+- 真实水文计算强依赖 QGIS SAGA provider；当前环境未检测到 `saga/sagang` provider 时不会改用 GRASS，也不会生成伪水文图层。
+
+## 验证命令
+
+```bash
+python -m unittest discover -s tests
+python scripts/build_plugins.py
+```
+
+QGIS Desktop 运行时验收见 `docs/qgis_manual_checklist.md`。

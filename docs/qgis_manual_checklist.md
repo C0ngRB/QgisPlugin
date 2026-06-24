@@ -11,20 +11,49 @@
 - [ ] 菜单出现 `WUDA 可达性分析`。
 - [ ] 菜单出现 `WUDA 地形水文分析`。
 - [ ] 两个 PyQt 面板均可打开。
-- [ ] 默认模式只展示 workflow 入口。
+- [ ] 默认模式展示 workflow 入口。
 - [ ] 高级模式展示细粒度算法入口。
 
-## Processing
+## Processing 注册
 
 - [ ] Processing 工具箱出现 `WUDA 可达性分析` Provider。
 - [ ] Processing 工具箱出现 `WUDA 地形水文分析` Provider。
+- [ ] `release_manifest.json` 中列出的算法均能在对应 Provider 中找到。
+
+## 标准化验收
+
 - [ ] `run_standardization_workflow` 能打开参数窗口。
+- [ ] 输入建筑、道路、POI、高程点、轨迹后生成 `standard_data.gpkg`。
+- [ ] GeoPackage 至少包含 `buildings`、`roads`、`pois`、`elevation_points`、`tracks` 五个图层。
+- [ ] 输出目录生成 `run_summary.json`，且 `outputs` 记录真实 GeoPackage 路径。
+
+## 可达性验收
+
 - [ ] `run_accessibility_workflow` 能打开参数窗口。
+- [ ] workflow 生成 `accessibility_buildings.gpkg`。
+- [ ] workflow 生成 `facility_service_areas.gpkg`。
+- [ ] workflow 生成 `facility_supply_demand.gpkg`。
+- [ ] workflow 生成 `nearest_facility_links.gpkg`。
+- [ ] 四个输出图层均可加载，且 `run_summary.json` 记录真实输出名。
+
+## 地形验收
+
 - [ ] `run_terrain_workflow` 能打开参数窗口。
-- [ ] `run_hydrology_workflow` 能打开参数窗口。
+- [ ] workflow 生成 `slope.tif`、`aspect.tif`、`hillshade.tif`。
+- [ ] workflow 生成 `contours.gpkg`，字段包含 `elevation_m`。
+- [ ] workflow 生成 `dem_elevation_comparison.gpkg`，字段包含 `measured_elev_m`、`dem_elev_m`、`elev_diff_m`、`abs_diff_m`。
+- [ ] 输出目录生成 `run_summary.json`。
+
+## 水文验收
+
 - [ ] `check_saga_provider` 能写入 `run_summary.json`。
+- [ ] QGIS Processing provider 列表有 `saga` 或 `sagang` 时，水文细粒度算法执行真实 SAGA 流程。
+- [ ] QGIS Processing provider 列表没有 `saga/sagang` 时，`fill_sinks` 等细粒度水文算法明确报错，不生成假结果。
+- [ ] 无 SAGA 时，`run_hydrology_workflow` 写入 `mode=demo`、`is_demo_result=true` 的 `run_summary.json`。
+- [ ] 若插件包未包含真实 demo/sample 空间数据，水文 demo summary 的 `outputs` 应为空，并包含“未生成任何 demo 空间图层”警告。
 
 ## 边界
 
-- [ ] 未实现细粒度算法会明确报错，不生成假结果。
-- [ ] SAGA 不可用时，水文流程说明应进入 demo/sample 模式。
+- [ ] 水文算法不调用 GRASS、WhiteboxTools 或欧氏距离替代 SAGA。
+- [ ] 输出文件冲突时追加 `_001`、`_002` 后缀，不覆盖已有结果。
+- [ ] 插件壳不直接实现空间分析，业务逻辑位于 `core/`。

@@ -40,7 +40,7 @@ from core.workflows.standardization import run_standardization_workflow
 
 
 class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
-    """类含义：可达性插件通用薄 Algorithm；上游由 Provider 按注册表创建；下游把执行契约交给 core；风险点是当前阶段未实现的算法必须显式失败。"""
+    """类含义：可达性插件通用薄 Algorithm；上游由 Provider 按注册表创建；下游把执行契约交给 core；风险点是算法分支必须与注册表保持一致。"""
 
     OUTPUT_FOLDER = "OUTPUT_FOLDER"
     INPUT = "INPUT"
@@ -121,7 +121,7 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
             "calculate_shortest_path": "输入道路线、起点和目标点图层，输出从起点到目标图层的最短路径线。",
             "calculate_facility_suitability": "输入建筑和设施点，按设施类型输出最近设施近似适宜性评价长表。",
         }
-        return help_text.get(self.algorithm_name, "当前阶段提供插件注册、参数入口和运行摘要契约；真实空间分析按后续阶段在 core 中补齐。")
+        return help_text.get(self.algorithm_name, "该算法由共享 core 执行真实空间分析或工作流编排；具体输出以 run_summary.json 和 Processing 结果为准。")
 
     def createInstance(self):
         """函数含义：创建同名算法新实例；上游由 QGIS Processing 克隆算法时调用；下游隔离每次执行状态；风险点是不能返回共享实例。"""
@@ -192,7 +192,7 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
     def processAlgorithm(self, parameters, context, feedback):
         """函数含义：执行已实现的可达性算法入口；上游由 QGIS Processing 运行器调用；下游生成真实图层、摘要或显式拒绝未实现算法；风险点是不得生成假空间分析结果。"""
         if self.algorithm_name not in self.IMPLEMENTED_ALGORITHMS:
-            raise QgsProcessingException(f"{self.displayName()} 尚未在当前阶段实现真实空间分析。")
+            raise QgsProcessingException(f"{self.displayName()} 未在当前插件注册表中实现执行分支。")
         if self.algorithm_name == "run_standardization_workflow":
             service_type_field = self.parameterAsString(parameters, self.SERVICE_TYPE_FIELD, context)
             measured_field = self.parameterAsString(parameters, self.MEASURED_FIELD, context)
@@ -280,7 +280,7 @@ class RegisteredAccessibilityAlgorithm(QgsProcessingAlgorithm):
             result = generate_facility_buffers(parameters[self.FACILITIES], distance, unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context)), context, feedback)
             return {self.OUTPUT: result["OUTPUT"]}
         output_folder = self.parameterAsString(parameters, self.OUTPUT_FOLDER, context)
-        summary_path = write_run_summary(output_folder, f"{ACCESSIBILITY_PROVIDER_ID}:{self.algorithm_name}", outputs=[], warnings=["当前阶段仅验证插件工作流入口和摘要契约，未生成空间分析结果。"])
+        summary_path = write_run_summary(output_folder, f"{ACCESSIBILITY_PROVIDER_ID}:{self.algorithm_name}", outputs=[], warnings=["该算法没有匹配的执行分支，未生成空间分析结果。"])
         feedback.pushInfo(f"已写入运行摘要：{summary_path}")
         return {self.OUTPUT_FOLDER: output_folder}
 

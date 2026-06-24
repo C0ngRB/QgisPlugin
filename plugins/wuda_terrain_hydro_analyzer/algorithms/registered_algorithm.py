@@ -50,7 +50,7 @@ from core.terrain.elevation_compare import compare_dem_with_elevation_points
 
 
 class RegisteredTerrainHydroAlgorithm(QgsProcessingAlgorithm):
-    """类含义：地形水文插件通用薄 Algorithm；上游由 Provider 按注册表创建；下游把执行契约交给 core；风险点是当前阶段未实现的算法必须显式失败。"""
+    """类含义：地形水文插件通用薄 Algorithm；上游由 Provider 按注册表创建；下游把执行契约交给 core；风险点是水文算法必须坚持 SAGA 边界。"""
 
     OUTPUT_FOLDER = "OUTPUT_FOLDER"
     INPUT = "INPUT"
@@ -120,7 +120,7 @@ class RegisteredTerrainHydroAlgorithm(QgsProcessingAlgorithm):
         }
         if self.algorithm_name in self.TERRAIN_ALGORITHMS:
             return "输入 DEM 栅格，输出真实地形分析图层；坡度、坡向和晕渲输出 GeoTIFF，等高线输出矢量线图层。"
-        return help_text.get(self.algorithm_name, "当前阶段提供插件注册、SAGA 检测入口和运行摘要契约；真实水文分析按后续阶段在 core 中补齐。")
+        return help_text.get(self.algorithm_name, "该算法由共享 core 执行真实地形分析、SAGA 水文分析或 demo 摘要契约；无 SAGA 时不会生成伪水文图层。")
 
     def createInstance(self):
         """函数含义：创建同名算法新实例；上游由 QGIS Processing 克隆算法时调用；下游隔离每次执行状态；风险点是不能返回共享实例。"""
@@ -185,7 +185,7 @@ class RegisteredTerrainHydroAlgorithm(QgsProcessingAlgorithm):
     def processAlgorithm(self, parameters, context, feedback):
         """函数含义：执行已实现的地形水文算法入口；上游由 QGIS Processing 运行器调用；下游生成真实图层、摘要或显式拒绝未实现算法；风险点是不得生成假空间分析结果。"""
         if self.algorithm_name not in self.IMPLEMENTED_ALGORITHMS:
-            raise QgsProcessingException(f"{self.displayName()} 尚未在当前阶段实现真实空间分析。")
+            raise QgsProcessingException(f"{self.displayName()} 未在当前插件注册表中实现执行分支。")
         if self.algorithm_name == "run_standardization_workflow":
             service_type_field = self.parameterAsString(parameters, self.SERVICE_TYPE_FIELD, context)
             measured_field = self.parameterAsString(parameters, self.MEASURED_FIELD, context)
@@ -282,7 +282,7 @@ class RegisteredTerrainHydroAlgorithm(QgsProcessingAlgorithm):
             result = compare_dem_with_elevation_points(parameters[self.ELEVATION_POINTS], measured_field, parameters[self.DEM], unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context)), context, feedback)
             return {self.OUTPUT: result["OUTPUT"]}
         output_folder = self.parameterAsString(parameters, self.OUTPUT_FOLDER, context)
-        warnings = ["当前阶段仅验证插件工作流入口和摘要契约，未生成空间分析结果。"]
+        warnings = ["该算法没有匹配的执行分支，未生成空间分析结果。"]
         if self.algorithm_name == "check_saga_provider":
             is_available = saga_provider_available()
             warnings = [] if is_available else ["SAGA Provider 不可用，后续真实水文流程应进入 demo/sample 模式。"]

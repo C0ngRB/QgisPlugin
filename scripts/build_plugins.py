@@ -21,9 +21,9 @@ def repo_root():
 
 
 def reset_directory(path):
-    """函数含义：清空并重建构建目录；上游由 build_all 调用；下游保证 build/dist 由脚本生成而非手工维护；风险点是只能用于项目内构建产物目录。"""
+    """函数含义：清空并重建构建目录；上游由 build_all 调用；下游保证 build/dist 由脚本生成而非手工维护；风险点是 Windows 删除目录时可能遇到文件已被并发清理。"""
     if path.exists():
-        shutil.rmtree(path)
+        shutil.rmtree(path, ignore_errors=True)
     path.mkdir(parents=True, exist_ok=True)
 
 
