@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from core.config.defaults import load_defaults
+from core.hydrology.saga import load_hydrology_demo_results
 from core.io.output_naming import unique_output_path
 from core.io.qgis_output import unique_qgis_output_path
 from core.registry.algorithms import ACCESSIBILITY_PROVIDER_ID, TERRAIN_HYDRO_PROVIDER_ID, provider_algorithms
@@ -75,6 +76,17 @@ class CoreContractTests(unittest.TestCase):
             output = unique_qgis_output_path(f"{target}|layername=test")
             self.assertTrue(output.endswith("result_001.gpkg|layername=test"))
 
+
+    def test_hydrology_demo_summary_without_demo_files(self):
+        """函数含义：校验无 demo 文件时只写 demo 摘要；上游由 unittest 执行器调用；下游防止无 SAGA 环境生成伪水文图层；风险点是不覆盖 QGIS 图层加载。"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result = load_hydrology_demo_results(None, temp_dir, "missing saga", "provider:run_hydrology_workflow")
+            summary = json.loads(Path(result["SUMMARY"]).read_text(encoding="utf-8"))
+            self.assertEqual(result["OUTPUTS"], [])
+            self.assertEqual(summary["algorithm_id"], "provider:run_hydrology_workflow")
+            self.assertEqual(summary["mode"], "demo")
+            self.assertTrue(summary["is_demo_result"])
+            self.assertIn("未生成任何 demo 空间图层", " ".join(summary["warnings"]))
     def test_write_run_summary_records_real_output_names(self):
         """函数含义：校验运行摘要记录输出和模式；上游由测试执行器调用；下游保证课程验收可追踪；风险点是不验证 QGIS 图层加载。"""
         with tempfile.TemporaryDirectory() as temp_dir:

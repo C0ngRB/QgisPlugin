@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from qgis.core import (
     QgsProcessing,
     QgsProcessingAlgorithm,
@@ -17,7 +19,17 @@ from ..support.core_path import ensure_core_import_path
 
 ensure_core_import_path(__file__)
 
-from core.hydrology.saga import saga_provider_available
+from core.hydrology.saga import (
+    extract_flow_accumulation,
+    extract_flow_direction,
+    extract_stream_network,
+    extract_stream_order,
+    extract_watershed_basins,
+    fill_sinks,
+    load_hydrology_demo_results,
+    run_hydrology_workflow,
+    saga_provider_available,
+)
 from core.io.qgis_output import unique_qgis_output_path
 from core.registry.algorithms import TERRAIN_HYDRO_PROVIDER_ID, algorithm_display_name
 from core.reporting.summary import write_run_summary
@@ -68,7 +80,9 @@ class RegisteredTerrainHydroAlgorithm(QgsProcessingAlgorithm):
         "write_standard_geopackage",
     }
     TERRAIN_ALGORITHMS = {"extract_slope", "extract_aspect", "extract_hillshade", "extract_contours"}
-    IMPLEMENTED_ALGORITHMS = STANDARDIZATION_ALGORITHMS | TERRAIN_ALGORITHMS | {"compare_dem_with_elevation_points", "check_saga_provider", "run_terrain_workflow", "run_hydrology_workflow"}
+    HYDROLOGY_RASTER_ALGORITHMS = {"fill_sinks", "extract_flow_direction", "extract_flow_accumulation", "extract_stream_order"}
+    HYDROLOGY_VECTOR_ALGORITHMS = {"extract_stream_network", "extract_watershed_basins"}
+    IMPLEMENTED_ALGORITHMS = STANDARDIZATION_ALGORITHMS | TERRAIN_ALGORITHMS | HYDROLOGY_RASTER_ALGORITHMS | HYDROLOGY_VECTOR_ALGORITHMS | {"compare_dem_with_elevation_points", "check_saga_provider", "load_hydrology_demo_results", "run_terrain_workflow", "run_hydrology_workflow"}
 
     def __init__(self, algorithm_name):
         """函数含义：绑定单个注册算法名；上游由 Provider 遍历 core 注册表调用；下游让同一个薄类承载多个算法入口；风险点是 algorithm_name 必须来自注册表。"""
@@ -129,6 +143,13 @@ class RegisteredTerrainHydroAlgorithm(QgsProcessingAlgorithm):
         if self.algorithm_name == "run_terrain_workflow":
             self._add_terrain_workflow_parameters()
             return
+        if self.algorithm_name == "run_hydrology_workflow":
+            self.addParameter(QgsProcessingParameterRasterLayer(self.DEM, "DEM 栅格"))
+            self.addParameter(QgsProcessingParameterFolderDestination(self.OUTPUT_FOLDER, "输出目录"))
+            return
+        if self.algorithm_name == "load_hydrology_demo_results":
+            self.addParameter(QgsProcessingParameterFolderDestination(self.OUTPUT_FOLDER, "输出目录"))
+            return
         if self.algorithm_name in self.STANDARDIZATION_ALGORITHMS:
             self._add_standardization_parameters()
             return
@@ -144,6 +165,14 @@ class RegisteredTerrainHydroAlgorithm(QgsProcessingAlgorithm):
                 self.addParameter(QgsProcessingParameterVectorDestination(self.OUTPUT, "等高线", QgsProcessing.TypeVectorLine))
                 return
             self.addParameter(QgsProcessingParameterRasterDestination(self.OUTPUT, self.displayName()))
+            return
+        if self.algorithm_name in self.HYDROLOGY_RASTER_ALGORITHMS:
+            self.addParameter(QgsProcessingParameterRasterLayer(self.DEM, "DEM 栅格"))
+            self.addParameter(QgsProcessingParameterRasterDestination(self.OUTPUT, self.displayName()))
+            return
+        if self.algorithm_name in self.HYDROLOGY_VECTOR_ALGORITHMS:
+            self.addParameter(QgsProcessingParameterRasterLayer(self.DEM, "DEM 栅格"))
+            self.addParameter(QgsProcessingParameterVectorDestination(self.OUTPUT, self.displayName(), QgsProcessing.TypeVectorAnyGeometry))
             return
         if self.algorithm_name == "compare_dem_with_elevation_points":
             self.addParameter(QgsProcessingParameterRasterLayer(self.DEM, "DEM 栅格"))
@@ -212,6 +241,39 @@ class RegisteredTerrainHydroAlgorithm(QgsProcessingAlgorithm):
                 if interval <= 0:
                     raise QgsProcessingException("等高距必须大于 0。")
                 result = extract_contours(dem_layer, interval, output, context, feedback)
+            return {self.OUTPUT: result["OUTPUT"]}
+        if self.algorithm_name == "run_hydrology_workflow":
+            result = run_hydrology_workflow(
+                parameters[self.DEM],
+                self.parameterAsString(parameters, self.OUTPUT_FOLDER, context),
+                context,
+                feedback,
+                Path(__file__).resolve().parents[1] / "demo",
+            )
+            feedback.pushInfo(f"已写入水文工作流摘要：{result['SUMMARY']}")
+            return {self.OUTPUT_FOLDER: result["OUTPUT_FOLDER"]}
+        if self.algorithm_name == "load_hydrology_demo_results":
+            result = load_hydrology_demo_results(
+                Path(__file__).resolve().parents[1] / "demo",
+                self.parameterAsString(parameters, self.OUTPUT_FOLDER, context),
+                "用户请求加载水文 demo/sample 结果。",
+            )
+            feedback.pushInfo(f"已写入水文 demo 摘要：{result['SUMMARY']}")
+            return {self.OUTPUT_FOLDER: result["OUTPUT_FOLDER"]}
+        if self.algorithm_name in self.HYDROLOGY_RASTER_ALGORITHMS | self.HYDROLOGY_VECTOR_ALGORITHMS:
+            output = unique_qgis_output_path(self.parameterAsOutputLayer(parameters, self.OUTPUT, context))
+            hydrology_functions = {
+                "fill_sinks": fill_sinks,
+                "extract_flow_direction": extract_flow_direction,
+                "extract_flow_accumulation": extract_flow_accumulation,
+                "extract_stream_order": extract_stream_order,
+                "extract_stream_network": extract_stream_network,
+                "extract_watershed_basins": extract_watershed_basins,
+            }
+            try:
+                result = hydrology_functions[self.algorithm_name](parameters[self.DEM], output, context, feedback)
+            except RuntimeError as error:
+                raise QgsProcessingException(str(error))
             return {self.OUTPUT: result["OUTPUT"]}
         if self.algorithm_name == "compare_dem_with_elevation_points":
             measured_field = self.parameterAsString(parameters, self.MEASURED_FIELD, context)
