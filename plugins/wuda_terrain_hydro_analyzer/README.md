@@ -8,8 +8,8 @@
 - Provider 注册标准化、地形和水文算法清单。
 - 地形算法输出真实坡度、坡向、晕渲、等高线和 DEM 高程点对比结果。
 - `run_terrain_workflow` 一键生成基础地形成果和 `run_summary.json`。
-- 水文细粒度算法只调用 SAGA provider；无 SAGA 时明确失败，不改用 GRASS 或伪结果。
-- `run_hydrology_workflow` 在无 SAGA 时进入 demo 摘要模式，写入 `mode=demo`、`is_demo_result=true` 的 `run_summary.json`。
+- Fine-grained hydrology algorithms use SAGA only: QGIS provider first, then `saga_cmd.exe`; if neither exists they fail clearly and never use GRASS or fake results.
+- `run_hydrology_workflow` writes `mode=real` when provider or `saga_cmd.exe` is available; only when both are unavailable does it enter demo summary mode.
 
 ## 水文边界
 

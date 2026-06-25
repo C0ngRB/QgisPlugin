@@ -217,30 +217,32 @@ def check_hydrology_contract(processing, registry, project):
         for name, expected_params in expected.items()
     }
     output_dir = make_output_dir("hydrology")
+    processing.run("wuda_terrain_hydro_analyzer:check_saga_provider", {"OUTPUT_FOLDER": str(output_dir)})
+    check_summary = json.loads(latest_file(output_dir, "run_summary*.json").read_text(encoding="utf-8"))
     processing.run(
         "wuda_terrain_hydro_analyzer:run_hydrology_workflow",
         {"DEM": first_layer(project, "二实习底图_DEM底色"), "OUTPUT_FOLDER": str(output_dir)},
     )
     summary = json.loads(latest_file(output_dir, "run_summary*.json").read_text(encoding="utf-8"))
     providers = saga_provider_ids()
+    if summary["mode"] == "real" and summary["outputs"]:
+        output_checks = {
+            "filled_dem_valid": raster_valid(latest_file(output_dir, "filled_dem*.tif")),
+            "flow_direction_valid": raster_valid(latest_file(output_dir, "flow_direction*.tif")),
+            "flow_accumulation_valid": raster_valid(latest_file(output_dir, "flow_accumulation*.tif")),
+            "stream_order_valid": raster_valid(latest_file(output_dir, "stream_order*.tif")),
+            "stream_network_count": vector_count(latest_file(output_dir, "stream_network*.gpkg"), None),
+            "drainage_basins_count": vector_count(latest_file(output_dir, "drainage_basins*.gpkg"), None),
+        }
+        if not all(value for key, value in output_checks.items() if key.endswith("_valid")):
+            raise RuntimeError(f"Real hydrology raster outputs are not loadable: {output_checks}")
+        engine = "saga_provider" if "saga" in providers or "sagang" in providers else "saga_cmd"
+        return {"providers": providers, "engine": engine, "params": params, "check_saga_summary": check_summary, "summary": summary, "output_checks": output_checks}
     if "saga" not in providers and "sagang" not in providers:
         if summary["mode"] != "demo" or summary["is_demo_result"] is not True:
-            raise RuntimeError(f"无 SAGA 时未进入 demo 摘要模式: {summary}")
-        error_text = ""
-        try:
-            processing.run(
-                "wuda_terrain_hydro_analyzer:fill_sinks",
-                {"DEM": first_layer(project, "二实习底图_DEM底色"), "OUTPUT": str(output_dir / "should_not_exist.tif")},
-            )
-        except Exception as exc:
-            error_text = str(exc)
-        if "SAGA Provider 不可用" not in error_text and "未找到" not in error_text:
-            raise RuntimeError(f"无 SAGA 时 fill_sinks 未明确失败: {error_text}")
-        return {"providers": providers, "params": params, "summary": summary, "fill_sinks_error": error_text}
-    if not summary["outputs"]:
-        raise RuntimeError(f"有 SAGA 时水文 workflow 未生成输出: {summary}")
-    return {"providers": providers, "params": params, "summary": summary}
-
+            raise RuntimeError(f"No SAGA provider and no real command output, but workflow did not enter demo summary mode: {summary}")
+        return {"providers": providers, "engine": "demo", "params": params, "check_saga_summary": check_summary, "summary": summary}
+    raise RuntimeError(f"SAGA is available but hydrology workflow did not create real outputs: {summary}")
 
 def main():
     """函数含义：执行完整 QGIS 运行时验收；上游由 python-qgis.bat 命令调用；下游输出 JSON 报告并以退出码表示是否通过；风险点是依赖本机课程工程和 QGIS profile。"""

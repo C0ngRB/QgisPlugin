@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from core.config.defaults import load_defaults
-from core.hydrology.saga import load_hydrology_demo_results
+from core.hydrology.saga import _filesystem_output_path, _saga_cmd_command, load_hydrology_demo_results
 from core.io.output_naming import unique_output_path
 from core.io.qgis_output import unique_qgis_output_path
 from core.registry.algorithms import ACCESSIBILITY_PROVIDER_ID, TERRAIN_HYDRO_PROVIDER_ID, provider_algorithms
@@ -95,6 +95,24 @@ class CoreContractTests(unittest.TestCase):
             self.assertEqual(summary["algorithm_id"], "provider:algorithm")
             self.assertEqual(summary["outputs"], ["result.gpkg"])
             self.assertEqual(summary["warnings"], ["warning"])
+
+    def test_saga_cmd_command_matches_adr_tools(self):
+        """Purpose: verify saga_cmd tool IDs and output flags; upstream caller is unittest; downstream protects real SAGA hydrology routing; risk is this does not execute SAGA itself."""
+        temp_dir = Path("C:/tmp/wuda_saga_unit")
+        filled = _saga_cmd_command("fill_sinks", "dem.tif", Path("filled.tif"), temp_dir)
+        flow = _saga_cmd_command("extract_flow_accumulation", "filled.tif", Path("flow.tif"), temp_dir)
+        network = _saga_cmd_command("extract_stream_network", "filled.tif", Path("network.gpkg"), temp_dir)
+        self.assertEqual(filled[:4], ["ta_preprocessor", "4", "-ELEV", "dem.tif"])
+        self.assertIn("-FILLED", filled)
+        self.assertEqual(flow[:4], ["ta_hydrology", "0", "-ELEVATION", "filled.tif"])
+        self.assertIn("-FLOW", flow)
+        self.assertEqual(network[:4], ["ta_channels", "5", "-DEM", "filled.tif"])
+        self.assertIn("-SEGMENTS", network)
+        self.assertIn("-BASINS", network)
+
+    def test_saga_cmd_output_path_strips_qgis_layer_suffix(self):
+        """Purpose: verify QGIS output URIs become file paths for saga_cmd; upstream caller is unittest; downstream prevents SAGA from receiving layername suffixes; risk is only filesystem outputs are covered."""
+        self.assertEqual(_filesystem_output_path("C:/tmp/result.gpkg|layername=basins"), Path("C:/tmp/result.gpkg"))
 
 
 if __name__ == "__main__":

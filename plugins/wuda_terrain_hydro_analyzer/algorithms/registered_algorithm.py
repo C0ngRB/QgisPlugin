@@ -28,6 +28,7 @@ from core.hydrology.saga import (
     fill_sinks,
     load_hydrology_demo_results,
     run_hydrology_workflow,
+    saga_available,
     saga_provider_available,
 )
 from core.io.qgis_output import unique_qgis_output_path
@@ -284,8 +285,14 @@ class RegisteredTerrainHydroAlgorithm(QgsProcessingAlgorithm):
         output_folder = self.parameterAsString(parameters, self.OUTPUT_FOLDER, context)
         warnings = ["该算法没有匹配的执行分支，未生成空间分析结果。"]
         if self.algorithm_name == "check_saga_provider":
-            is_available = saga_provider_available()
-            warnings = [] if is_available else ["SAGA Provider 不可用，后续真实水文流程应进入 demo/sample 模式。"]
+            provider_available = saga_provider_available()
+            is_available = saga_available()
+            if provider_available:
+                warnings = []
+            elif is_available:
+                warnings = ["QGIS SAGA Provider is unavailable, but saga_cmd.exe was found; real hydrology will use SAGA command-line execution."]
+            else:
+                warnings = ["SAGA Provider and saga_cmd.exe are unavailable; hydrology workflow should enter demo/sample mode."]
         summary_path = write_run_summary(output_folder, f"{TERRAIN_HYDRO_PROVIDER_ID}:{self.algorithm_name}", outputs=[], mode="real", warnings=warnings)
         feedback.pushInfo(f"已写入运行摘要：{summary_path}")
         return {self.OUTPUT_FOLDER: output_folder}

@@ -30,8 +30,8 @@ python scripts/build_plugins.py
 ## 当前能力
 
 - `WudaAccessibilityAnalyzer`：标准化、GeoPackage 打包、道路成本、设施缓冲、最近设施、网络服务区、最短路径、设施适宜性和可达性 workflow。
-- `WudaTerrainHydroAnalyzer`：标准化、GeoPackage 打包、坡度、坡向、晕渲、等高线、DEM 高程点对比、地形 workflow、水文 SAGA 契约和无 SAGA demo 摘要模式。
-- 真实水文计算强依赖 QGIS SAGA provider；当前环境未检测到 `saga/sagang` provider 时不会改用 GRASS，也不会生成伪水文图层。
+- `WudaTerrainHydroAnalyzer`: standardization, GeoPackage packaging, terrain outputs, DEM elevation comparison, terrain workflow, real SAGA hydrology through provider or `saga_cmd.exe`, and demo summary only when no SAGA engine exists.
+- Real hydrology uses SAGA only: QGIS `saga/sagang` provider first, then `saga_cmd.exe` from the same QGIS/OSGeo4W install; if neither exists, the plugin writes a demo summary and never substitutes GRASS or fake layers.
 
 ## 验证命令
 

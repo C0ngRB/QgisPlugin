@@ -46,10 +46,10 @@
 
 ## 水文验收
 
-- [ ] `check_saga_provider` 能写入 `run_summary.json`。
+- [ ] `check_saga_provider` writes `run_summary.json` and reflects availability of QGIS SAGA provider or `saga_cmd.exe`.
 - [ ] QGIS Processing provider 列表有 `saga` 或 `sagang` 时，水文细粒度算法执行真实 SAGA 流程。
-- [ ] QGIS Processing provider 列表没有 `saga/sagang` 时，`fill_sinks` 等细粒度水文算法明确报错，不生成假结果。
-- [ ] 无 SAGA 时，`run_hydrology_workflow` 写入 `mode=demo`、`is_demo_result=true` 的 `run_summary.json`。
+- [ ] If provider is absent but `saga_cmd.exe` exists, `fill_sinks` and related hydrology algorithms still generate real SAGA outputs.
+- [ ] If both SAGA provider and `saga_cmd.exe` are unavailable, `run_hydrology_workflow` writes `mode=demo`, `is_demo_result=true`.
 - [ ] 若插件包未包含真实 demo/sample 空间数据，水文 demo summary 的 `outputs` 应为空，并包含“未生成任何 demo 空间图层”警告。
 
 ## 边界

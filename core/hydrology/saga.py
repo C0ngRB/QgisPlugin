@@ -1,3 +1,8 @@
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
 from core.io.output_naming import unique_output_path
@@ -22,12 +27,49 @@ SAGA_ALGORITHM_CANDIDATES = {
     "extract_watershed_basins": ("sagang:channelnetworkanddrainagebasins", "saga:channelnetworkanddrainagebasins"),
 }
 
+SAGA_CMD_TOOLS = {
+    "fill_sinks": ("ta_preprocessor", "4"),
+    "extract_flow_direction": ("ta_preprocessor", "4"),
+    "extract_flow_accumulation": ("ta_hydrology", "0"),
+    "extract_stream_order": ("ta_channels", "6"),
+    "extract_stream_network": ("ta_channels", "5"),
+    "extract_watershed_basins": ("ta_channels", "5"),
+}
+
 
 def saga_provider_available():
     """函数含义：检测 QGIS SAGA Provider 是否可用；上游由水文算法和手工验收调用；下游决定真实水文或 demo 模式；风险点是只能在 QGIS Python 环境中调用。"""
     from qgis.core import QgsApplication
 
     return QgsApplication.processingRegistry().providerById("saga") is not None or QgsApplication.processingRegistry().providerById("sagang") is not None
+
+
+def saga_cmd_path():
+    """Purpose: find saga_cmd.exe in the active QGIS/OSGeo4W install; upstream callers are hydrology algorithms; downstream runs real SAGA when the QGIS provider is absent; risk is that executable discovery does not prove every tool can run."""
+    env_path = os.environ.get("SAGA_CMD")
+    if env_path and Path(env_path).exists():
+        return str(Path(env_path))
+    found = shutil.which("saga_cmd") or shutil.which("saga_cmd.exe")
+    if found:
+        return found
+    for candidate in _saga_cmd_candidates():
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
+def saga_cmd_available():
+    """Purpose: report whether SAGA command-line execution is discoverable; upstream callers are workflow mode checks and tests; downstream permits real hydrology without the Processing provider; risk is that this is only an existence check."""
+    return saga_cmd_path() is not None
+
+
+def saga_available():
+    """Purpose: report whether any supported SAGA engine exists; upstream caller is the hydrology workflow; downstream chooses real execution or demo summary; risk is that provider probing can fail outside QGIS and must not hide saga_cmd."""
+    try:
+        provider_available = saga_provider_available()
+    except Exception:
+        provider_available = False
+    return provider_available or saga_cmd_available()
 
 
 def require_saga_algorithm(algorithm_key):
@@ -77,8 +119,8 @@ def run_hydrology_workflow(dem_layer, output_folder, context, feedback, demo_dir
     """函数含义：执行水文 workflow 或在无 SAGA 时进入 demo 契约；上游由 run_hydrology_workflow 算法传入 DEM 和输出目录；下游生成真实水文结果或 demo 模式摘要；风险点是无 SAGA 且无真实 demo 数据时只能记录原因，不能造假图层。"""
     resolved_output_folder = Path(output_folder)
     resolved_output_folder.mkdir(parents=True, exist_ok=True)
-    if not saga_provider_available():
-        return load_hydrology_demo_results(demo_dir, output_folder, "SAGA Provider 不可用，未执行真实水文流程。", "wuda_terrain_hydro_analyzer:run_hydrology_workflow")
+    if not saga_available():
+        return load_hydrology_demo_results(demo_dir, output_folder, "SAGA Provider and saga_cmd.exe are unavailable; real hydrology was not executed.", "wuda_terrain_hydro_analyzer:run_hydrology_workflow")
     outputs = {}
     outputs["filled_dem"] = fill_sinks(dem_layer, str(unique_output_path(resolved_output_folder / "filled_dem.tif")), context, feedback)["OUTPUT"]
     outputs["flow_direction"] = extract_flow_direction(outputs["filled_dem"], str(unique_output_path(resolved_output_folder / "flow_direction.tif")), context, feedback)["OUTPUT"]
@@ -111,7 +153,104 @@ def load_hydrology_demo_results(demo_dir, output_folder, reason, algorithm_id="w
 
 
 def _run_single_output_saga(algorithm_key, parameters, output_key, context, feedback):
-    """函数含义：执行单输出 SAGA 水文算法；上游由具体水文函数传入参数；下游统一调用 Processing 并返回 OUTPUT 键；风险点是参数名需与 SAGA 版本匹配，不匹配时让 QGIS 抛出错误。"""
-    algorithm_id = require_saga_algorithm(algorithm_key)
-    result = run_processing_algorithm(algorithm_id, parameters, context, feedback)
-    return {"OUTPUT": result.get(output_key) or result.get("OUTPUT")}
+    """Purpose: execute one SAGA hydrology output; upstream callers are fine-grained hydrology functions; downstream uses Processing first and saga_cmd second; risk is that both paths must remain real SAGA, never GRASS/native substitutes."""
+    try:
+        provider_available = saga_provider_available()
+    except Exception:
+        provider_available = False
+    if provider_available:
+        algorithm_id = require_saga_algorithm(algorithm_key)
+        result = run_processing_algorithm(algorithm_id, parameters, context, feedback)
+        return {"OUTPUT": result.get(output_key) or result.get("OUTPUT")}
+    return {"OUTPUT": _run_saga_cmd_single_output(algorithm_key, parameters, output_key, feedback)}
+
+
+def _run_saga_cmd_single_output(algorithm_key, parameters, output_key, feedback):
+    """Purpose: run one hydrology output through saga_cmd.exe; upstream caller is the provider-missing SAGA wrapper; downstream writes GeoTIFF/GeoPackage outputs; risk is command failure must raise instead of leaving empty files."""
+    saga_cmd = saga_cmd_path()
+    if not saga_cmd:
+        raise RuntimeError("SAGA Provider unavailable and saga_cmd.exe was not found; real hydrology cannot run.")
+    dem_path = _layer_source_path(parameters.get("ELEV") or parameters.get("ELEVATION") or parameters.get("DEM"))
+    output_path = _filesystem_output_path(parameters[output_key])
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="wuda_saga_") as temp_dir:
+        command = _saga_cmd_command(algorithm_key, dem_path, output_path, Path(temp_dir))
+        _run_saga_process(saga_cmd, command, feedback)
+    if not output_path.exists():
+        raise RuntimeError(f"SAGA finished without creating the target output: {output_path}")
+    return str(output_path)
+
+
+def _saga_cmd_command(algorithm_key, dem_path, output_path, temp_dir):
+    """Purpose: build saga_cmd arguments for ADR hydrology steps; upstream caller is the command wrapper; downstream passes the list to subprocess; risk is these parameters are bound to SAGA 9.x and tests must expose version drift."""
+    library, tool_id = SAGA_CMD_TOOLS[algorithm_key]
+    if algorithm_key == "fill_sinks":
+        return [library, tool_id, "-ELEV", dem_path, "-FILLED", str(output_path), "-FDIR", str(temp_dir / "flow_direction.tif"), "-WSHED", str(temp_dir / "watershed_basins.tif")]
+    if algorithm_key == "extract_flow_direction":
+        return [library, tool_id, "-ELEV", dem_path, "-FILLED", str(temp_dir / "filled_dem.tif"), "-FDIR", str(output_path), "-WSHED", str(temp_dir / "watershed_basins.tif")]
+    if algorithm_key == "extract_flow_accumulation":
+        return [library, tool_id, "-ELEVATION", dem_path, "-FLOW", str(output_path)]
+    if algorithm_key == "extract_stream_order":
+        return [library, tool_id, "-DEM", dem_path, "-STRAHLER", str(output_path)]
+    if algorithm_key == "extract_stream_network":
+        return [library, tool_id, "-DEM", dem_path, "-SEGMENTS", str(output_path), "-BASINS", str(temp_dir / "drainage_basins.gpkg"), "-THRESHOLD", "5"]
+    return [library, tool_id, "-DEM", dem_path, "-SEGMENTS", str(temp_dir / "stream_network.gpkg"), "-BASINS", str(output_path), "-THRESHOLD", "5"]
+
+
+def _run_saga_process(saga_cmd, command, feedback):
+    """Purpose: run the saga_cmd subprocess and forward concise logs; upstream caller is the command wrapper; downstream creates real SAGA output files; risk is system PROJ_LIB pollution, so the child env is cleaned."""
+    env = os.environ.copy()
+    env.pop("PROJ_LIB", None)
+    proj_data = _qgis_proj_data_path()
+    if proj_data:
+        env["PROJ_DATA"] = str(proj_data)
+    saga_bin = str(Path(saga_cmd).parent)
+    env["PATH"] = saga_bin + os.pathsep + env.get("PATH", "")
+    completed = subprocess.run([saga_cmd, *command], capture_output=True, text=True, env=env, check=False)
+    if feedback and completed.stdout:
+        feedback.pushInfo(_tail_text(completed.stdout))
+    if completed.returncode != 0:
+        raise RuntimeError(f"saga_cmd failed: {_tail_text(completed.stderr or completed.stdout)}")
+
+
+def _layer_source_path(layer_or_path):
+    """Purpose: resolve a QGIS raster layer or path to a filesystem path; upstream caller is saga_cmd execution; downstream supplies the DEM input; risk is only file-backed rasters are supported."""
+    source = layer_or_path.source() if hasattr(layer_or_path, "source") else str(layer_or_path)
+    return source.split("|", 1)[0]
+
+
+def _filesystem_output_path(output):
+    """Purpose: collapse a QGIS output URI to a SAGA-writable file path; upstream caller is saga_cmd execution; downstream passes the path as an output parameter; risk is GeoPackage layername suffixes are ignored."""
+    return Path(str(output).split("|", 1)[0])
+
+
+def _saga_cmd_candidates():
+    """Purpose: list saga_cmd.exe candidates from the current process; upstream caller is saga_cmd_path; downstream reduces manual configuration; risk is limited to standard QGIS/OSGeo4W layouts."""
+    roots = []
+    try:
+        from qgis.core import QgsApplication
+
+        prefix = Path(QgsApplication.prefixPath())
+        roots.append(prefix.parents[1])
+    except Exception:
+        pass
+    executable = Path(sys.executable)
+    roots.extend([parent for parent in executable.parents if parent.name.lower().startswith(("qgis", "osgeo4w"))])
+    roots.append(Path(r"C:\Program Files\QGIS 3.40.0"))
+    return [root / "apps" / "saga" / "saga_cmd.exe" for root in roots]
+
+
+def _qgis_proj_data_path():
+    """Purpose: locate QGIS proj.db for the child process; upstream caller builds the saga_cmd environment; downstream avoids PostgreSQL or other PROJ installs; risk is non-standard installs may need external PROJ_DATA."""
+    command_path = saga_cmd_path()
+    if not command_path:
+        return None
+    candidate = Path(command_path).parents[2] / "share" / "proj"
+    if (candidate / "proj.db").exists():
+        return candidate
+    return None
+
+
+def _tail_text(text, max_chars=1200):
+    """Purpose: keep the tail of SAGA logs for QGIS messages and exceptions; upstream caller is subprocess handling; downstream avoids flooding errors with progress output; risk is very short tails can omit clues."""
+    return text[-max_chars:].strip()
